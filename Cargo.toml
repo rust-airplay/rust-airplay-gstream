@@ -1,0 +1,36 @@
+[package]
+name = "rust-airplay-gstream"
+description = "GStreamer backend for the rust-airplay receiver: decodes the coded frames the library hands over and plays them"
+repository = "https://github.com/rust-airplay/rust-airplay-gstream"
+readme = "README.md"
+include = ["/src/**/*.rs", "/Cargo.toml", "/README.md", "/README.zh-CN.md", "/LICENSE"]
+keywords = ["airplay", "gstreamer", "renderer", "video", "audio"]
+categories = ["multimedia"]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+license = "GPL-3.0-or-later"
+publish = false
+
+[lib]
+name = "rust_airplay_gstream"
+path = "src/lib.rs"
+
+[lints.rust]
+unsafe_code = "forbid"
+missing_docs = "warn"
+
+[lints.clippy]
+all = "warn"
+
+[dependencies]
+# The core library: protocol, decryption and framing. This crate decodes and presents.
+# Git for now, which is also why `publish` is false: crates.io rejects a git dependency,
+# and this becomes a version requirement once the core is published.
+rust-airplay = { git = "https://github.com/rust-airplay/rust-airplay", branch = "main" }
+# Linked rather than run as a subprocess for audio: audio needs `appsrc`, one buffer per
+# frame, because a `gst-launch` pipeline fed bytes on stdin cannot express where a frame
+# ends (see `src/audio.rs`).
+gstreamer = "0.24"
+gstreamer-app = "0.24"
+
