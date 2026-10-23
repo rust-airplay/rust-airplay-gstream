@@ -39,6 +39,8 @@ use rust_airplay::{
     VideoStream, Volume,
 };
 
+use gstreamer::glib::prelude::*;
+
 use pipeline::{LaunchError, Pipeline, find_launcher, lock};
 
 /// The sinks this backend can play into, in the order it prefers them.
@@ -167,7 +169,7 @@ pub struct GstRenderer {
     ///
     /// A client's volume can change mid-session, and a pipeline started before the change
     /// would otherwise keep playing at the volume it opened with.
-    live_audio: Mutex<Option<gstreamer::Element>>,
+    live_audio: Mutex<Option<gstreamer::glib::WeakRef<gstreamer::Element>>>,
     /// The video pipeline a session reuses instead of starting its own.
     ///
     /// Held across sessions on purpose: this is the window and the decoder, and dropping
@@ -416,7 +418,7 @@ impl Renderer for GstRenderer {
         let stream = audio::GstAudio::open(config, &self.audio_sink, volume)?;
         // A client can change the volume while this stream plays, so the element is kept
         // where `set_volume` can reach it.
-        *lock(&self.live_audio) = Some(stream.volume_element());
+        *lock(&self.live_audio) = Some(stream.volume_element().downgrade());
         Ok(Box::new(stream))
     }
 
@@ -462,15 +464,20 @@ impl Renderer for GstRenderer {
     }
 
     fn set_volume(&self, volume: Volume) -> Result<(), RenderError> {
-        // GStreamer's own volume control is a pipeline element, and a pipeline is
-        // started before a client says anything about volume, so what this backend can
-        // do without rebuilding every stream is remember it. The session reads it back;
-        // a stream opened later gets it as a `volume` element. Playing at a volume a
-        // client asked for is what S4-3 wires up.
+        // The value is kept for streams opened later - a pipeline starts before a client
+        // says anything about volume - and applied to the stream that is playing now. Both
+        // matter: a client that turns the volume down expects the sound that is coming out
+        // to change, not the next session's.
         *self
             .volume
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner) = volume;
+        let live = lock(&self.live_audio).clone();
+        if let Some(element) = live.and_then(|weak| weak.upgrade()) {
+            // `volume` is the stream-volume element the audio pipeline is built with; its
+            // property is a linear gain, which is what `Volume::fraction` is.
+            element.set_property("volume", volume.fraction());
+        }
         Ok(())
     }
 }
@@ -526,6 +533,37 @@ impl VideoStream for GstVideo {
 #[cfg(test)]
 mod tests {
     use super::{VIDEO_SINKS, VideoCodec, default_video_chain, video_pipeline};
+    use gstreamer::glib::prelude::*;
+    use rust_airplay::Renderer as _;
+
+    #[test]
+    #[ignore = "needs a GStreamer runtime; see README.md"]
+    fn a_volume_change_reaches_the_audio_stream_that_is_playing() {
+        // The bug this pins: `set_volume` only remembered the value for the next stream,
+        // so turning the volume down on the sending device changed nothing that could be
+        // heard.
+        let Ok(renderer) = super::GstRenderer::with_sinks("fakesink", "fakesink") else {
+            eprintln!("skipping: no GStreamer runtime");
+            return;
+        };
+        let stream = renderer
+            .open_audio(rust_airplay::AudioConfig::default())
+            .expect("an audio stream");
+        renderer
+            .set_volume(rust_airplay::Volume::new(0.25))
+            .expect("a volume");
+        let element = {
+            let live = super::lock(&renderer.live_audio);
+            live.as_ref().and_then(|weak| weak.upgrade())
+        }
+        .expect("the stream that is playing");
+        let applied: f64 = element.property("volume");
+        assert!(
+            (applied - 0.25).abs() < 1e-9,
+            "the element plays at {applied}"
+        );
+        drop(stream);
+    }
 
     #[test]
     fn changing_the_sink_changes_the_decoder_with_it() {
