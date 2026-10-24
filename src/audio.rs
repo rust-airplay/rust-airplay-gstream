@@ -105,7 +105,11 @@ pub(crate) struct GstAudio {
     pushed: AtomicU64,
     /// The timestamp of the first frame of this stream, which every presentation time is
     /// measured from. Set once, by the first frame that arrives.
-    first_timestamp: std::sync::OnceLock<u64>,
+    ///
+    /// Kept as the client's own 32 bits: an audio timestamp is an RTP counter, and a
+    /// receiver that widened it would stop measuring elapsed time once it wrapped, which a
+    /// session that runs for a day does.
+    first_timestamp: std::sync::OnceLock<u32>,
     /// The rate a frame's timestamp is counted in, which is what makes it a time.
     ///
     /// `AudioFrame::timestamp` is the client's own clock, and for audio that clock counts
@@ -122,6 +126,15 @@ impl std::fmt::Debug for GstAudio {
             .field("pushed", &self.pushed.load(Ordering::Relaxed))
             .finish_non_exhaustive()
     }
+}
+
+/// Samples between two RTP timestamps, counting the 32-bit wrap.
+///
+/// The counters are the client's: they advance by `spf` a frame and wrap at 2^32. A receiver
+/// that subtracted them as 64-bit values would put a frame after the wrap at a time a day
+/// ahead of the stream.
+pub(crate) fn elapsed_samples(stamp: u32, first: u32) -> u64 {
+    u64::from(stamp.wrapping_sub(first))
 }
 
 /// How long after a stream's first frame a frame with `samples` elapsed samples is due.
@@ -234,11 +247,17 @@ fn run(
         appsrc.set_format(gst::Format::Time);
 
         // The guard is held for as long as the loop runs: dropping it removes the watch.
+        // Each of the three steps below can fail, and none of them is worth a panic in a
+        // thread that owns a sound card: the reason goes back through `ready`, which is how
+        // `open` learns why it has no stream.
+        let Some(bus) = pipeline.bus() else {
+            let _ = ready.send(Err("the audio pipeline has no bus".to_owned()));
+            return;
+        };
         let _watching = {
             let quiet = Arc::clone(&failure);
             let loop_for_bus = loop_.clone();
-            let bus = pipeline.bus().expect("a pipeline has a bus");
-            bus.add_watch_local(move |_, message| {
+            match bus.add_watch_local(move |_, message| {
                 use gst::MessageView;
                 match message.view() {
                     MessageView::Error(error) => {
@@ -265,9 +284,31 @@ fn run(
                     }
                     _ => gst::glib::ControlFlow::Continue,
                 }
-            })
-            .expect("the bus watch is added")
+            }) {
+                Ok(watching) => watching,
+                Err(error) => {
+                    let _ = ready.send(Err(format!(
+                        "the audio pipeline cannot be watched: {error}"
+                    )));
+                    return;
+                }
+            }
         };
+
+        // The thread that stops the pipeline is started before the stream is handed out: a
+        // stream whose stop never arrives is a pipeline that holds a sound card until the
+        // process ends.
+        let loop_for_stop = loop_.clone();
+        if let Err(error) = std::thread::Builder::new()
+            .name("airplay-gst-audio-stop".to_owned())
+            .spawn(move || {
+                let _ = stopping.recv();
+                loop_for_stop.quit();
+            })
+        {
+            let _ = ready.send(Err(format!("the audio stop thread cannot start: {error}")));
+            return;
+        }
 
         if let Err(error) = pipeline.set_state(gst::State::Playing) {
             let _ = ready.send(Err(format!("the audio pipeline will not start: {error}")));
@@ -277,21 +318,6 @@ fn run(
         // pipeline that is not ready for it: `appsrc` would take them and the state change
         // would drop them, which is a moment of silence at the start of every session.
         let _ = ready.send(Ok((appsrc, volume)));
-
-        // The thread ends when the pipeline fails, ends, or is told to stop. `quit` is safe
-        // to call from another thread and wakes the loop, so a small thread waits on the
-        // channel and quits — which is also what happens when the sender is dropped, so a
-        // stream that went away without closing still ends its pipeline.
-        {
-            let loop_for_stop = loop_.clone();
-            std::thread::Builder::new()
-                .name("airplay-gst-audio-stop".to_owned())
-                .spawn(move || {
-                    let _ = stopping.recv();
-                    loop_for_stop.quit();
-                })
-                .expect("the stop thread starts");
-        }
 
         loop_.run();
         let _ = pipeline.set_state(gst::State::Null);
@@ -321,15 +347,16 @@ impl AudioStream for GstAudio {
             // client's epoch: an audio timestamp is an RTP counter from a random origin,
             // so its absolute value means nothing here. What it does mean is elapsed
             // audio, and a sink told to synchronise schedules against exactly that.
+            let stamp = frame.timestamp as u32;
             let first = match self.first_timestamp.get() {
                 Some(first) => *first,
                 None => {
-                    let _ = self.first_timestamp.set(frame.timestamp);
-                    frame.timestamp
+                    let _ = self.first_timestamp.set(stamp);
+                    stamp
                 }
             };
             buffer.set_pts(gst::ClockTime::from_nseconds(relative_nanos(
-                frame.timestamp.wrapping_sub(first),
+                elapsed_samples(stamp, first),
                 self.sample_rate,
             )));
         }
@@ -368,7 +395,19 @@ impl Drop for GstAudio {
 }
 #[cfg(test)]
 mod tests {
-    use super::relative_nanos;
+    use super::{elapsed_samples, relative_nanos};
+
+    #[test]
+    fn a_client_counter_that_wraps_still_measures_elapsed_audio() {
+        // The counter is 32 bits. A stream that runs for a day reaches the wrap, and a
+        // receiver that subtracted 64-bit values would put the next frame about a day ahead.
+        assert_eq!(elapsed_samples(500, 0), 500);
+        // `0x100` after `0xFFFFFF00` is `0x200` samples later, not a negative span.
+        assert_eq!(elapsed_samples(0x100, 0xFFFF_FF00), 0x200);
+        assert_eq!(elapsed_samples(0, 0xFFFF_FFFF), 1);
+        // And the two frames are still ten milliseconds apart.
+        assert!(relative_nanos(elapsed_samples(0x100, 0xFFFF_FF00), 44_100) < 12_000_000);
+    }
 
     #[test]
     fn one_frame_of_forty_eight_kilohertz_audio_is_ten_milliseconds() {
