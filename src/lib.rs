@@ -477,6 +477,15 @@ impl Renderer for GstRenderer {
             // `volume` is the stream-volume element the audio pipeline is built with; its
             // property is a linear gain, which is what `Volume::fraction` is.
             element.set_property("volume", volume.fraction());
+            log::debug!(
+                "gstreamer: volume {:.3} applied to the audio stream that is playing",
+                volume.fraction()
+            );
+        } else {
+            log::debug!(
+                "gstreamer: volume {:.3} kept for the next audio stream; none is playing",
+                volume.fraction()
+            );
         }
         Ok(())
     }

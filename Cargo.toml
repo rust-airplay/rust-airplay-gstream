@@ -32,5 +32,7 @@ rust-airplay = { git = "https://github.com/rust-airplay/rust-airplay", branch = 
 # frame, because a `gst-launch` pipeline fed bytes on stdin cannot express where a frame
 # ends (see `src/audio.rs`).
 gstreamer = "0.24"
+# Records, not printing: the program embedding this backend decides what a user sees.
+log = "0.4"
 gstreamer-app = "0.24"
 
