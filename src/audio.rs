@@ -1,12 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //! The audio stream: an `appsrc` the session pushes frames into.
 //!
-//! Audio cannot be delivered the way video is. A socket is a stream of bytes either way,
-//! but H.264 has start codes, so a decoder can find its frames in a run of them, and raw
-//! AAC-ELD has no such thing: a frame carries no sample rate of its own and there is no
-//! sync word to split on. The only way a decoder can be given these frames is one buffer
-//! per frame, which is what upstream does and why upstream plays sound
-//! (`upstream/UxPlay@3dbf7cee:renderers/audio_renderer.c:332-367`).
+//! Audio cannot be delivered the way video is. A socket is a stream of bytes either way, but
+//! H.264 has start codes, so a decoder can find its frames in a run of them, and raw AAC-ELD has
+//! no such thing: a frame carries no sample rate of its own and there is no sync word to split
+//! on. The only way a decoder can be given these frames is one buffer per frame.
 //!
 //! `appsrc` is that buffer, and it is why audio is linked into this process while video is
 //! still run as a `gst-launch` subprocess.
@@ -15,9 +13,9 @@
 //!
 //! - **the caps carry `codec_data`**, the MPEG-4 `AudioSpecificConfig` that says what the
 //!   frames are. A raw frame cannot say it, so a decoder without it cannot fix its output
-//!   format and refuses the stream with "output caps are unfixed". The values are
-//!   upstream's (`audio_renderer.c:60-68`), and the value a build must not invent for ELD is
-//!   not even ELD — its object type decodes to 33 rather than 39;
+//!   format and refuses the stream with "output caps are unfixed". The values are AirPlay's,
+//!   and the value a build must not invent for ELD is not even ELD - its object type decodes
+//!   to 33 rather than 39;
 //! - **one push is one frame**, because that is the only boundary a raw AAC stream has.
 
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -37,8 +35,7 @@ type Failure = Arc<Mutex<Option<String>>>;
 ///
 /// The `codec_data` is the part that cannot be derived from the frames: it is the
 /// `AudioSpecificConfig` (for AAC) or the magic cookie (for ALAC) that a decoder needs
-/// before it can read one. Both values are upstream's own
-/// (`upstream/UxPlay@3dbf7cee:renderers/audio_renderer.c:60-68`).
+/// before it can read one. Both values are AirPlay's
 fn audio_caps(config: AudioConfig) -> Result<gst::Caps, RenderError> {
     let text = match config.codec {
         AudioCodec::AacEld => format!(

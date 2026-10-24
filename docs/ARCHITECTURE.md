@@ -58,17 +58,11 @@ desktop application may not.
 
 ## Flushing and closing
 
-`flush` is a no-op on both streams, and that is a real limitation rather than a decision:
-
-- a `gst-launch-1.0` pipeline is a process fed by a pipe; there is no in-band flush signal for
-  a byte stream, so frames already written are decoded and shown;
-- an `appsrc` pipeline cannot discard buffers already pushed without ending the stream.
-
-What limits the damage is the decoder itself: after a gap, a video decoder resynchronises at
-the next key frame, and the core's queue restarts there for the same reason. The practical
-effect is that a flush can leave up to the pipeline's buffered frames on screen for a moment.
-A backend that needs an exact flush must own its pipeline in-process, which is what a future
-in-process video path would do.
+`flush` has no in-band equivalent on either stream: a `gst-launch-1.0` pipeline is a process
+fed by a pipe, and a pipe has no flush signal; an `appsrc` pipeline cannot discard buffers
+already pushed without ending the stream. A video decoder resynchronises at the next key frame
+after a gap, and the core's queue restarts there for the same reason, so a flush leaves at most
+the pipeline's buffered frames to play out.
 
 `close` ends the audio stream with an end-of-stream event so the decoder drains, and closes the
 video pipeline only when it is not warm. `Drop` stops both: a pipeline left running would hold

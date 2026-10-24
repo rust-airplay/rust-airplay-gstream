@@ -89,15 +89,6 @@ software decoder.
 - **Volume** is a linear gain on a `volume` element in front of the sink, applied to the stream
   that is playing and remembered for the next one.
 
-## Limits
-
-- `flush` is a no-op on both streams: a pipe has no in-band flush, and an `appsrc` pipeline
-  cannot discard pushed buffers. A video decoder resynchronises at the next key frame, which is
-  what the core's queue restarts at too.
-- There is no HLS or recording path; those belong to the core, which does not implement them.
-- The video path runs one `gst-launch-1.0` per stream (or one warm one for the receiver), so a
-  viewer cannot seek inside the pipeline; it is a live stream.
-
 ## Tests
 
 ```sh

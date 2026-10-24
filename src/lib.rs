@@ -1,30 +1,28 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //! A renderer that plays through GStreamer.
 //!
-//! This is the backend the architecture document chose first, in the shape upstream gives it: an audio
-//! renderer and a video renderer, each with a pipeline of its own, and the application
-//! choosing a sink (`upstream/UxPlay@3dbf7cee:renderers/`).
+//! The backend has two renderers, each with a pipeline of its own, and the application chooses
+//! the sink.
 //!
-//! **Audio is linked; video is a subprocess.** That split is not an accident of history —
-//! it is what the two media allow:
+//! **Audio is linked; video is a subprocess.** That split follows from what the two media
+//! allow:
 //!
 //! - **Video** is run as `gst-launch-1.0` with frames written to its stdin. H.264 and H.265
 //!   carry start codes, so a decoder finds its own picture boundaries in a byte stream.
-//!   [`pipeline`] says why the subprocess shape was chosen, and
-//!   `docs/ARCHITECTURE.md` records the decision.
-//! - **Audio** cannot be: a raw AAC-ELD frame has no sync word and no sample rate of its
-//!   own, so a byte stream says nothing about where a frame ends. It needs one buffer per
-//!   frame — `appsrc` — which is why [`audio`] links `libgstreamer` for it.
+//!   [`pipeline`] says why the subprocess shape was chosen, and `docs/ARCHITECTURE.md` records
+//!   the decision.
+//! - **Audio** cannot be: a raw AAC-ELD frame has no sync word and no sample rate of its own, so
+//!   a byte stream says nothing about where a frame ends. It needs one buffer per frame -
+//!   `appsrc` - which is why [`audio`] links `libgstreamer` for it.
 //!
 //! ```text
-//! audio:  appsrc ! queue ! avdec_aac ! audioconvert ! audioresample ! <sink>
-//! video:  fdsrc ! decodebin ! videoconvert ! video/x-raw,format=I420 ! <sink>
+//! audio: appsrc ! queue ! avdec_aac ! audioconvert ! audioresample ! <sink>
+//! video: fdsrc ! decodebin ! videoconvert ! video/x-raw,format=I420 ! <sink>
 //! ```
 //!
-//! A coding this backend cannot describe is refused when the stream is opened, not when
-//! the first frame arrives: a client whose audio never plays should be told once, at the
-//! moment a session could still choose differently.
-//!
+//! A coding this backend cannot describe is refused when the stream is opened, not when the
+//! first frame arrives: a client whose audio never plays should be told once, at the moment a
+//! session could still choose differently.
 
 #![deny(missing_docs)]
 
@@ -44,7 +42,7 @@ use pipeline::{LaunchError, Pipeline, find_launcher, lock};
 
 /// The sinks this backend can play into, in the order it prefers them.
 ///
-/// Upstream lets a user choose one (`renderers/`'s sink options) and so does this, by
+/// The protocol lets a user choose one (`renderers/`'s sink options) and so does this, by
 /// name: a machine whose preferred sink is missing is a machine whose user knows which
 /// one it has.
 pub const AUDIO_SINKS: &[&str] = &[
@@ -90,7 +88,7 @@ pub const WARM_VIDEO_ENV: &str = "AIRPLAY_GST_VIDEO_WARM";
 /// Everything a caller can choose about how this backend plays.
 ///
 /// The defaults are what the environment variables would produce, so a caller that wants
-/// no surprises can take `Options::default()` and still override one field.
+/// no surprises can take `Options::default` and still override one field.
 #[derive(Debug, Clone)]
 pub struct Options {
     /// Audio sink name, `wasapisink` on Windows.
@@ -194,7 +192,7 @@ impl GstRenderer {
     ///
     /// // Fails unless this machine has GStreamer and `gst-launch-1.0`.
     /// let renderer: Arc<dyn Renderer> =
-    ///     Arc::new(rust_airplay_gstream::GstRenderer::new().expect("a GStreamer runtime"));
+    /// Arc::new(rust_airplay_gstream::GstRenderer::new.expect("a GStreamer runtime"));
     /// # let _ = renderer;
     /// ```
     pub fn new() -> Result<Self, RenderError> {
@@ -387,8 +385,8 @@ fn unavailable(error: LaunchError) -> RenderError {
 /// something but not all of it". `videoconvert` to a format every sink reads removes
 /// the negotiation from the path a picture takes.
 fn video_pipeline(sink: &str, parser: &str, decoder: &str) -> String {
-    // The parser and the decoder are named, the way upstream names them
-    // (`upstream/UxPlay/renderers/video_renderer.c:383-395`: `appsrc ! queue ! <parser> !
+    // The parser and the decoder are named, the way the protocol names them
+    // (: `appsrc ! queue ! <parser> !
     // <decoder> ! <converter> ! <sink>`). `decodebin` looks like the general answer and is
     // half the speed of the specific one: measured on a mirror stream of 1554x1080, thirty
     // real frames took 2036 ms through `decodebin` and 1343 ms through `h264parse !
@@ -405,7 +403,7 @@ fn video_pipeline(sink: &str, parser: &str, decoder: &str) -> String {
 /// The parser and decoder chain for `sink`, when the caller names neither.
 ///
 /// A client sends H.264, so the parser and decoder for it are named rather than left to
-/// `decodebin`. Upstream makes the same two choices configurable (`-vp` for the parser,
+/// `decodebin`. The protocol makes the same two choices configurable (`-vp` for the parser,
 /// `-vd` for the decoder, defaulting to `decodebin`), and this crate keeps that shape: the
 /// names can be overridden, and the default is the one measured faster here. Thirty real
 /// frames of a 1554x1080 stream took 2036 ms through `decodebin` and 1343 ms through
@@ -683,7 +681,7 @@ mod tests {
     #[test]
     fn every_pipeline_names_a_parser_and_a_decoder() {
         // Not `decodebin`: measured at half the throughput of the named pair (see
-        // `video_pipeline`), and upstream does not use it either.
+        // `video_pipeline`), and the protocol does not use it either.
         for sink in VIDEO_SINKS {
             let (parser, decoder) = default_video_chain(VideoCodec::H264, sink);
             let pipeline = video_pipeline(sink, &parser, &decoder);
