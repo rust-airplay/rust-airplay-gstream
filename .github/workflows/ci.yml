@@ -33,6 +33,7 @@ jobs:
           sudo apt-get install -y libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev
 
       - name: Install GStreamer (Windows)
+        id: msys2
         if: runner.os == 'Windows'
         uses: msys2/setup-msys2@v2
         with:
@@ -50,9 +51,19 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          "C:\msys64\ucrt64\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
-          "PKG_CONFIG=C:\msys64\ucrt64\bin\pkgconf.exe" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-          "PKG_CONFIG_PATH=C:\msys64\ucrt64\lib\pkgconfig" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          $msys2 = '${{ steps.msys2.outputs.msys2-location }}'
+          if (-not $msys2) { $msys2 = 'C:\msys64' }
+          $prefix = Join-Path $msys2 'ucrt64'
+          $pkgconf = Join-Path $prefix 'bin\pkgconf.exe'
+          if (-not (Test-Path $pkgconf)) {
+              $pkgconf = Join-Path $prefix 'bin\pkg-config.exe'
+          }
+          if (-not (Test-Path $pkgconf)) {
+              throw "pkg-config was not installed under $prefix"
+          }
+          (Join-Path $prefix 'bin') | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          "PKG_CONFIG=$pkgconf" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "PKG_CONFIG_PATH=$(Join-Path $prefix 'lib\pkgconfig')" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
       - name: Install Rust (Linux)
         if: runner.os == 'Linux'
