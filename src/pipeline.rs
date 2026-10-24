@@ -4,10 +4,8 @@
 //! The backend drives GStreamer as a subprocess rather than linking it, and this module
 //! is the whole of that: it finds `gst-launch-1.0`, starts it with a pipeline, writes
 //! frames to its standard input, and reports what it said when it fails. The reasoning
-//! behind the choice is in [`docs/ARCHITECTURE.md`]; what matters here is that
-//! nothing in it is unsafe and nothing in it needs a compiler for a C library.
-//!
-//! [`docs/ARCHITECTURE.md`]: ../../../docs/ARCHITECTURE.md
+//! behind the choice is in `docs/ARCHITECTURE.md`; what matters here is that nothing in it is
+//! unsafe and nothing in it needs a compiler for a C library.
 
 use std::io::Write;
 use std::process::{Child, ChildStdin, Command, Stdio};

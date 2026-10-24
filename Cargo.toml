@@ -2,8 +2,18 @@
 name = "rust-airplay-gstream"
 description = "GStreamer backend for the rust-airplay receiver: decodes the coded frames the library hands over and plays them"
 repository = "https://github.com/rust-airplay/rust-airplay-gstream"
+homepage = "https://github.com/rust-airplay/rust-airplay-gstream"
+documentation = "https://docs.rs/rust-airplay-gstream"
 readme = "README.md"
-include = ["/src/**/*.rs", "/Cargo.toml", "/README.md", "/README.zh-CN.md", "/LICENSE"]
+include = [
+    "/src/**/*.rs",
+    "/docs/**/*.md",
+    "/tests/**/*.rs",
+    "/Cargo.toml",
+    "/README.md",
+    "/README.zh-CN.md",
+    "/LICENSE",
+]
 keywords = ["airplay", "gstreamer", "renderer", "video", "audio"]
 categories = ["multimedia"]
 version = "0.1.0"

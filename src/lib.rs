@@ -11,7 +11,7 @@
 //! - **Video** is run as `gst-launch-1.0` with frames written to its stdin. H.264 and H.265
 //!   carry start codes, so a decoder finds its own picture boundaries in a byte stream.
 //!   [`pipeline`] says why the subprocess shape was chosen, and
-//!   [`docs/ARCHITECTURE.md`] records the decision.
+//!   `docs/ARCHITECTURE.md` records the decision.
 //! - **Audio** cannot be: a raw AAC-ELD frame has no sync word and no sample rate of its
 //!   own, so a byte stream says nothing about where a frame ends. It needs one buffer per
 //!   frame — `appsrc` — which is why [`audio`] links `libgstreamer` for it.
@@ -25,7 +25,6 @@
 //! the first frame arrives: a client whose audio never plays should be told once, at the
 //! moment a session could still choose differently.
 //!
-//! [`docs/ARCHITECTURE.md`]: ../../../docs/ARCHITECTURE.md
 
 #![deny(missing_docs)]
 
@@ -140,8 +139,8 @@ impl Options {
 
 impl Default for Options {
     fn default() -> Self {
-        let audio_sink = sink_from_env(AUDIO_SINK_ENV, AUDIO_SINKS);
-        let video_sink = sink_from_env(VIDEO_SINK_ENV, VIDEO_SINKS);
+        let audio_sink = sink_from_env(AUDIO_SINK_ENV, AUDIO_SINKS, "autoaudiosink");
+        let video_sink = sink_from_env(VIDEO_SINK_ENV, VIDEO_SINKS, "autovideosink");
         let (video_parser, video_decoder) = default_video_chain(VideoCodec::H264, &video_sink);
         Self {
             audio_sink,
@@ -184,14 +183,27 @@ impl GstRenderer {
     ///
     /// Returns [`RenderError::Unavailable`] when no `gst-launch-1.0` can be run, which
     /// is an environment problem and is reported as one
-    /// ([the architecture document](../../../docs/ARCHITECTURE.md)).
+    /// ([the architecture document](../docs/ARCHITECTURE.md)).
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use std::sync::Arc;
+    ///
+    /// use rust_airplay::Renderer;
+    ///
+    /// // Fails unless this machine has GStreamer and `gst-launch-1.0`.
+    /// let renderer: Arc<dyn Renderer> =
+    ///     Arc::new(rust_airplay_gstream::GstRenderer::new().expect("a GStreamer runtime"));
+    /// # let _ = renderer;
+    /// ```
     pub fn new() -> Result<Self, RenderError> {
         let program = find_launcher().map_err(unavailable)?;
-        let video_sink = sink_from_env(VIDEO_SINK_ENV, VIDEO_SINKS);
+        let video_sink = sink_from_env(VIDEO_SINK_ENV, VIDEO_SINKS, "autovideosink");
         let (video_parser, video_decoder) = default_video_chain(VideoCodec::H264, &video_sink);
         let renderer = Self {
             program,
-            audio_sink: sink_from_env(AUDIO_SINK_ENV, AUDIO_SINKS),
+            audio_sink: sink_from_env(AUDIO_SINK_ENV, AUDIO_SINKS, "autoaudiosink"),
             video_sink,
             video_parser,
             video_decoder,
@@ -322,12 +334,33 @@ fn warming() -> bool {
     )
 }
 
-/// Picks a sink: the environment's if it names one, the first of `preferred` otherwise.
-fn sink_from_env(variable: &str, preferred: &[&str]) -> String {
-    std::env::var(variable)
-        .ok()
-        .filter(|name| !name.trim().is_empty())
-        .unwrap_or_else(|| preferred[0].to_owned())
+/// Picks a sink: the environment's if it names one, the first available of `preferred`
+/// otherwise.
+///
+/// The list is ordered by preference, and a name early in it may not exist on this machine:
+/// `wasapisink` is Windows-only and `d3d11videosink` is Direct3D-only, so taking the first
+/// name would make the defaults wrong on every other platform. The element factory answers
+/// which names exist, and `fallback` is the name that always works when none of the others do.
+fn sink_from_env(variable: &str, preferred: &[&str], fallback: &str) -> String {
+    let named = std::env::var(variable).ok();
+    choose_sink(named.as_deref(), preferred, fallback)
+}
+
+/// The half of [`sink_from_env`] that does not read the environment.
+fn choose_sink(named: Option<&str>, preferred: &[&str], fallback: &str) -> String {
+    if let Some(name) = named.map(str::trim).filter(|name| !name.is_empty()) {
+        return name.to_owned();
+    }
+    if preferred.is_empty() {
+        return fallback.to_owned();
+    }
+    // Initialising is idempotent and cheap after the first call; a sink cannot be checked
+    // without it.
+    let _ = gstreamer::init();
+    preferred
+        .iter()
+        .find(|name| gstreamer::ElementFactory::find(name).is_some())
+        .map_or_else(|| fallback.to_owned(), |name| (*name).to_owned())
 }
 
 /// Turns a pipeline failure into the render error a session reports.
@@ -544,6 +577,40 @@ mod tests {
     use super::{VIDEO_SINKS, VideoCodec, default_video_chain, video_pipeline};
     use gstreamer::glib::prelude::*;
     use rust_airplay::Renderer as _;
+
+    #[test]
+    fn a_named_sink_wins_and_an_empty_preference_falls_back() {
+        // A named sink is the caller's decision, even one this machine does not have:
+        // failing with the name in the error is more useful than silently using another.
+        assert_eq!(
+            super::choose_sink(Some("fakesink"), super::VIDEO_SINKS, "autovideosink"),
+            "fakesink"
+        );
+        assert_eq!(
+            super::choose_sink(Some("  "), &[], "autovideosink"),
+            "autovideosink"
+        );
+        assert_eq!(
+            super::choose_sink(None, &[], "autoaudiosink"),
+            "autoaudiosink"
+        );
+    }
+
+    #[test]
+    #[ignore = "needs a GStreamer runtime; see README.md"]
+    fn the_default_sinks_exist_on_this_machine() {
+        // The bug this pins: the defaults took the first *name* in the preference list, so
+        // on every platform that is not Windows the audio default was `wasapisink` and the
+        // video default `d3d11videosink`, neither of which exists there.
+        let _ = gstreamer::init();
+        for sink in [super::AUDIO_SINKS, super::VIDEO_SINKS] {
+            let chosen = super::choose_sink(None, sink, "fakesink");
+            assert!(
+                gstreamer::ElementFactory::find(&chosen).is_some(),
+                "{chosen} was chosen but does not exist"
+            );
+        }
+    }
 
     #[test]
     #[ignore = "needs a GStreamer runtime; see README.md"]
