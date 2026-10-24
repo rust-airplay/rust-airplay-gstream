@@ -89,6 +89,15 @@ pub const WARM_VIDEO_ENV: &str = "AIRPLAY_GST_VIDEO_WARM";
 ///
 /// The defaults are what the environment variables would produce, so a caller that wants
 /// no surprises can take `Options::default` and still override one field.
+///
+/// # Examples
+///
+/// ```
+/// use rust_airplay_gstream::Options;
+///
+/// let options = Options::default().with_video_sink("fakesink");
+/// assert_eq!(options.video_sink, "fakesink");
+/// ```
 #[derive(Debug, Clone)]
 pub struct Options {
     /// Audio sink name, `wasapisink` on Windows.
@@ -192,7 +201,7 @@ impl GstRenderer {
     ///
     /// // Fails unless this machine has GStreamer and `gst-launch-1.0`.
     /// let renderer: Arc<dyn Renderer> =
-    /// Arc::new(rust_airplay_gstream::GstRenderer::new.expect("a GStreamer runtime"));
+    /// Arc::new(rust_airplay_gstream::GstRenderer::new().expect("a GStreamer runtime"));
     /// # let _ = renderer;
     /// ```
     pub fn new() -> Result<Self, RenderError> {
@@ -279,6 +288,19 @@ impl GstRenderer {
     ///
     /// Returns [`RenderError::Unavailable`] when no `gst-launch-1.0` can be run, which is
     /// an environment problem and is reported as one.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use rust_airplay_gstream::{GstRenderer, Options};
+    ///
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let options = Options::default().with_video_sink("fakesink");
+    /// let renderer = GstRenderer::with_options("gst-launch-1.0", options)?;
+    /// # let _ = renderer;
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn with_options(program: &str, options: Options) -> Result<Self, RenderError> {
         let renderer = Self {
             program: program.to_owned(),
