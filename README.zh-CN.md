@@ -23,8 +23,8 @@ Windows 上 MSYS2 UCRT64 两者都有，把 `C:\msys64\ucrt64\bin` 放进 `PATH`
 
 ```toml
 [dependencies]
-rust-airplay = { git = "https://github.com/rust-airplay/rust-airplay", branch = "main" }
-rust-airplay-gstream = { git = "https://github.com/rust-airplay/rust-airplay-gstream", branch = "main" }
+rust-airplay = "0.2"
+rust-airplay-gstream = "0.2"
 ```
 
 ```rust,no_run
@@ -41,7 +41,7 @@ rust_airplay::run(config).await?;
 # }
 ```
 
-这个 crate 还没有发布到 crates.io：它通过 git 依赖核心，在核心发布之前 `publish` 为 false。
+两个 crate 都已发布到 crates.io。`rust-airplay-gstream` 依赖核心的 0.2 系列，`Cargo.lock` 会把两者解析到同一组版本。
 
 ## Options
 

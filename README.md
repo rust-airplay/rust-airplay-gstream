@@ -31,8 +31,8 @@ packages for the elements above run it.
 
 ```toml
 [dependencies]
-rust-airplay = { git = "https://github.com/rust-airplay/rust-airplay", branch = "main" }
-rust-airplay-gstream = { git = "https://github.com/rust-airplay/rust-airplay-gstream", branch = "main" }
+rust-airplay = "0.2"
+rust-airplay-gstream = "0.2"
 ```
 
 ```rust,no_run
@@ -49,8 +49,8 @@ rust_airplay::run(config).await?;
 # }
 ```
 
-The crate is not on crates.io yet: it depends on the core through git, and `publish` is false
-until the core has a release.
+Both crates are on crates.io. `rust-airplay-gstream` depends on the core's 0.2 line, so a
+`Cargo.lock` resolves the pair together.
 
 ## Options
 

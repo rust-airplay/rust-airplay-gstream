@@ -20,7 +20,7 @@ version = "0.2.0"
 edition = "2024"
 rust-version = "1.85"
 license = "GPL-3.0-or-later"
-publish = false
+publish = true
 
 [lib]
 name = "rust_airplay_gstream"
@@ -35,9 +35,8 @@ all = "warn"
 
 [dependencies]
 # The core library: protocol, decryption and framing. This crate decodes and presents.
-# Git for now, which is also why `publish` is false: crates.io rejects a git dependency,
-# and this becomes a version requirement once the core is published.
-rust-airplay = { git = "https://github.com/rust-airplay/rust-airplay", branch = "main" }
+# Published on crates.io; this crate follows the core's 0.2 line.
+rust-airplay = "0.2"
 # Linked rather than run as a subprocess for audio: audio needs `appsrc`, one buffer per
 # frame, because a `gst-launch` pipeline fed bytes on stdin cannot express where a frame
 # ends (see `src/audio.rs`).
