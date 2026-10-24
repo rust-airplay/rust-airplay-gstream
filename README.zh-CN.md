@@ -1,5 +1,7 @@
 # rust-airplay-gstream
 
+[![CI](https://github.com/rust-airplay/rust-airplay-gstream/actions/workflows/ci.yml/badge.svg)](https://github.com/rust-airplay/rust-airplay-gstream/actions/workflows/ci.yml)
+
 [`rust-airplay`](https://github.com/rust-airplay/rust-airplay) 的 GStreamer 后端。
 
 `rust-airplay` 接收 AirPlay 会话、解密，并把编码后的帧交出来。这个 crate 负责解码与播放：音频走进程内链接的 GStreamer 管线，视频走 `gst-launch-1.0` 子进程。它实现核心的 `Renderer` trait，所以程序依赖核心拿协议、依赖这个 crate 拿播放。
@@ -81,6 +83,10 @@ cargo test -- --ignored
 ```
 
 被忽略的测试需要 GStreamer 运行时与 `gst-launch-1.0`。它们用真实会话里抓下来的帧做解码，这正是它们的价值所在：一条管线可以接受每个缓冲区却一个都不解码，只有解码输出能回答这个问题。
+
+## 发布
+
+`Publish to crates.io` 是手动工作流，需要仓库 secret `CARGO_REGISTRY_TOKEN`，从 `main` 运行，并支持 `dry_run`。请先发布它依赖的核心版本：打包本 crate 时 Cargo 会从 crates.io 解析 `rust-airplay = "0.2"`。
 
 ## 许可证
 

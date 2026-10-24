@@ -1,5 +1,7 @@
 # rust-airplay-gstream
 
+[![CI](https://github.com/rust-airplay/rust-airplay-gstream/actions/workflows/ci.yml/badge.svg)](https://github.com/rust-airplay/rust-airplay-gstream/actions/workflows/ci.yml)
+
 The GStreamer backend for [`rust-airplay`](https://github.com/rust-airplay/rust-airplay).
 
 `rust-airplay` receives an AirPlay session, decrypts it and hands over coded frames. This crate
@@ -99,6 +101,12 @@ cargo test -- --ignored
 The ignored tests need a GStreamer runtime and a `gst-launch-1.0`. They decode frames captured
 from a real session, which is what makes them useful: a pipeline can accept every buffer and
 still decode none, and only the decoded output settles that question.
+
+## Releasing
+
+`Publish to crates.io` is a manual workflow. It needs the `CARGO_REGISTRY_TOKEN` repository
+secret, runs from `main`, and accepts `dry_run`. Publish the core release it depends on
+first: Cargo resolves `rust-airplay = "0.2"` from crates.io while packaging this crate.
 
 ## Licence
 
