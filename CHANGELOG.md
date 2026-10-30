@@ -4,7 +4,7 @@ All notable changes to this crate are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the version numbers follow
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.3.0] - unreleased
+## [0.3.0] - 2026-10-30
 
 The renderer boundary did not change shape in core 0.3, so this release is this backend
 being held to it. Most of what follows is a bug that a session could hit; the version is a
