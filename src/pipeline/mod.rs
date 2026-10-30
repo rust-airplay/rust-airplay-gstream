@@ -56,6 +56,12 @@ pub(crate) struct Pipeline {
     child: Mutex<Child>,
     writer: Mutex<Option<Writer>>,
     finished: AtomicBool,
+    /// Whether a stream is still writing through it.
+    ///
+    /// A warm pipeline outlives the session that used it, so the stream that is writing
+    /// has to say when it has stopped: a second session that adopted it while the first
+    /// still pushed would interleave two H.264 streams into one pipe.
+    claimed: AtomicBool,
 }
 
 impl Pipeline {
@@ -82,6 +88,7 @@ impl Pipeline {
             child: Mutex::new(child),
             writer: Mutex::new(Some(writer)),
             finished: AtomicBool::new(false),
+            claimed: AtomicBool::new(false),
         };
         pipeline.settle();
         if pipeline.is_running() {
@@ -103,7 +110,7 @@ impl Pipeline {
     ///
     /// Returns [`LaunchError::Stopped`] when the pipeline has gone or stopped reading,
     /// with what it said when it said anything.
-    pub(crate) fn push(&self, frames: &[u8]) -> Result<(), LaunchError> {
+    pub(crate) fn push(&self, frames: Vec<u8>) -> Result<(), LaunchError> {
         let writer = lock(&self.writer).clone();
         let Some(writer) = writer else {
             return Err(self.stopped());
@@ -170,6 +177,21 @@ impl Pipeline {
         } else {
             Err(self.stopped())
         }
+    }
+
+    /// Marks the pipeline as being written through by one stream.
+    pub(crate) fn claim(&self) {
+        self.claimed.store(true, Ordering::SeqCst);
+    }
+
+    /// Marks the stream as finished with it, so the next session may adopt it.
+    pub(crate) fn release(&self) {
+        self.claimed.store(false, Ordering::SeqCst);
+    }
+
+    /// Whether a stream is still writing through it.
+    pub(crate) fn is_claimed(&self) -> bool {
+        self.claimed.load(Ordering::SeqCst)
     }
 
     /// Whether the pipeline is still running.

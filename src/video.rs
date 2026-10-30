@@ -89,6 +89,9 @@ impl GstVideo {
 
     /// Takes a pipeline the renderer keeps alive between sessions.
     pub(crate) fn adopted(pipeline: Arc<Pipeline>) -> Self {
+        // Said now rather than at the first push: a renderer handing this pipeline to a
+        // second session is the thing that must not happen, and it checks this first.
+        pipeline.claim();
         Self {
             pipeline,
             warm: true,
@@ -114,8 +117,9 @@ impl VideoStream for GstVideo {
                 frame.data.len()
             )));
         }
+        // Moved, not copied: the frame arrives owned and nothing here needs it again.
         self.pipeline
-            .push(&frame.data)
+            .push(frame.data)
             .map_err(pipeline::as_render_error)?;
         self.pushed.fetch_add(1, Ordering::Relaxed);
         Ok(())
@@ -160,6 +164,8 @@ impl VideoStream for GstVideo {
         if self.closed.swap(true, Ordering::SeqCst) {
             return Ok(());
         }
+        // The session is done writing, whether or not the pipeline is kept.
+        self.pipeline.release();
         if self.warm {
             // The pipeline is kept for the next session, which is what warming is for:
             // ending it here would make the next stream as cold as the first one.
@@ -174,6 +180,7 @@ impl VideoStream for GstVideo {
 impl Drop for GstVideo {
     fn drop(&mut self) {
         // A stream that was dropped without being closed is still a stream that ended.
+        self.pipeline.release();
         // The pipeline it owns stops here; a warm one is the renderer's to stop.
         if !self.warm {
             self.pipeline.abort();

@@ -10,6 +10,16 @@ use rust_airplay::{AudioCodec, AudioConfig, RenderError};
 /// AudioSpecificConfig (for AAC) or the magic cookie (for ALAC) that a decoder needs
 /// before it can read one. Both values are AirPlay's.
 pub(crate) fn audio_caps(config: AudioConfig) -> Result<gst::Caps, RenderError> {
+    // The part a coded frame does not carry is AirPlay's fixed configuration -- 44.1 kHz,
+    // stereo -- and it is written into codec_data rather than derived from the caps.
+    // Caps that disagree with it describe a stream no decoder reads correctly, so a
+    // configuration that would disagree is refused here instead.
+    if config.sample_rate != 44_100 || config.channels != 2 {
+        return Err(RenderError::Unavailable(format!(
+            "AirPlay audio is 44100 Hz stereo; this backend cannot describe {} Hz with {} channel(s)",
+            config.sample_rate, config.channels
+        )));
+    }
     let text = match config.codec {
         AudioCodec::AacEld => format!(
             "audio/mpeg,mpegversion=(int)4,channels=(int){},rate=(int){},stream-format=raw,\
@@ -75,12 +85,33 @@ pub(crate) fn audio_description(
 
 #[cfg(test)]
 mod tests {
-    use super::audio_decoder;
-    use rust_airplay::AudioCodec;
+    use super::{audio_caps, audio_decoder};
+    use rust_airplay::{AudioCodec, AudioConfig, RenderError};
 
     #[test]
     fn every_coding_this_backend_opens_has_a_decoder() {
         assert_eq!(audio_decoder(AudioCodec::AacEld), Some("avdec_aac"));
         assert_eq!(audio_decoder(AudioCodec::Alac), Some("avdec_alac"));
+    }
+
+    #[test]
+    fn a_configuration_the_caps_cannot_describe_is_refused() {
+        let _ = gstreamer::init();
+        assert!(audio_caps(AudioConfig::default()).is_ok());
+        // The codec_data in both branches says 44100 Hz stereo, so anything else is a
+        // stream the pipeline would describe and the decoder would not read.
+        let mono = AudioConfig {
+            channels: 1,
+            ..AudioConfig::default()
+        };
+        assert!(matches!(audio_caps(mono), Err(RenderError::Unavailable(_))));
+        let resampled = AudioConfig {
+            sample_rate: 48_000,
+            ..AudioConfig::default()
+        };
+        assert!(matches!(
+            audio_caps(resampled),
+            Err(RenderError::Unavailable(_))
+        ));
     }
 }

@@ -62,12 +62,14 @@ fn a_raw_aac_eld_stream_is_decoded() {
     let location = path.display().to_string().replace('\\', "/");
     let sink = format!("filesink location={location}");
     let renderer = GstRenderer::with_sinks(&sink, "fakesink").expect("a renderer");
+    let opened = std::time::Instant::now();
     let stream = renderer
         .open_audio(AudioConfig {
             codec: AudioCodec::AacEld,
             ..AudioConfig::default()
         })
         .expect("an audio stream opens");
+    println!("the audio pipeline opened in {:?}", opened.elapsed());
 
     for (index, payload) in captured.iter().enumerate() {
         let timestamp = index as u64 * SAMPLES_PER_FRAME;

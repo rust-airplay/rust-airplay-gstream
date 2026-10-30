@@ -80,9 +80,12 @@ impl StderrFile {
         let Ok(file) = std::fs::File::open(&self.path) else {
             return String::new();
         };
-        let mut text = String::new();
-        let _ = file.take(MOST).read_to_string(&mut text);
-        text.trim().to_owned()
+        let mut bytes = Vec::new();
+        let _ = file.take(MOST).read_to_end(&mut bytes);
+        // A decoder can emit a byte that is not UTF-8. The rest of what it said is still
+        // the diagnostic, so invalid sequences are replaced rather than throwing the
+        // whole message away.
+        String::from_utf8_lossy(&bytes).trim().to_owned()
     }
 }
 

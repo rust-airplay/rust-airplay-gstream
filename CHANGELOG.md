@@ -31,7 +31,29 @@ breaking change because the public surface is smaller than 0.2's.
   `write_all`, so a pipeline that stopped reading hung the session and every other thread
   that wanted that mutex, including `Drop`. Writes now happen on their own thread behind a
   four-buffer queue, and a frame the writer does not take within two seconds is a refused
-  frame.
+  frame. Waiting for room in that queue is bounded too, which it was not at first: a full
+  queue means the writer thread is stuck in a write, so offering it another job was the
+  same unbounded wait wearing a different name.
+- **An audio push could block forever on a sink that stopped draining.** `appsrc` blocks
+  once its queue reaches `max-bytes`, and nothing bounded that wait. The source no longer
+  blocks, the queue is bounded from this side (64 KiB, about two seconds of AAC-ELD), and a
+  frame that would cross the bound is a refused frame that says the pipeline is not
+  draining.
+- **A second warm session could share one pipe.** The renderer handed the kept pipeline to
+  a stream without asking whether one still held it, and two writers on one pipe interleave
+  two H.264 streams. A pipeline now records whether a stream is writing through it, a closed
+  stream releases it, and a session that finds it taken ends the old pipeline rather than
+  sharing it.
+- **A runtime audio failure was reported as an environment problem.** A pipeline that
+  started and then failed came back as `Unavailable` from `push`; it is `Failed`, which is
+  what the boundary means by it.
+- **Caps could disagree with the configuration they carried.** Both codings put a fixed
+  44.1 kHz stereo `codec_data` into the caps, so another sample rate or channel count
+  produced a description whose two halves disagreed. Such a configuration is refused with
+  `Unavailable` instead.
+- **A diagnostic could be thrown away for one bad byte.** The pipeline's output was read as
+  UTF-8 and an invalid sequence discarded the whole message; it is decoded lossily now, so
+  the readable part survives.
 - **Closing and dropping a stream had no deadline.** `finish` and `Drop` waited for the
   child with no timeout; they now wait five and two seconds and kill past that. Audio
   `close` sends end-of-stream and waits for the pipeline to reach it, so the sound card's
@@ -74,6 +96,11 @@ breaking change because the public surface is smaller than 0.2's.
 - **The video pipeline is built as an argument list**, not as one string split on whitespace: a
   caps filter contains commas and spaces, and a token list is the only form that survives
   `Command` on both Windows and Unix.
+- **Frames are handed to the writer by move, not by copy.** The frame arrives owned, so the
+  per-frame copy of a coded frame is gone; a clone measured 1 us at 64 KiB and 220 us at
+  1 MiB, which is small but was pure overhead.
+- **A spawn failure no longer leaks the child.** If the writer thread cannot start, the
+  process that was already spawned is killed and reaped before the error is returned.
 - **Frames have an upper bound** (`MAX_VIDEO_FRAME_BYTES`) and so does pacing
   (`MAX_PACE_SECONDS`), so a client cannot ask for a sleep it never wakes from.
 
@@ -94,6 +121,10 @@ breaking change because the public surface is smaller than 0.2's.
   symptom from other causes.
 - **`Chain`**, and the `AUDIO_SINKS`, `VIDEO_SINKS`, `MAX_PACE_SECONDS` and
   `MAX_VIDEO_FRAME_BYTES` constants are public.
+- **[tests/throughput.rs](tests/throughput.rs)** prints the video path's frame rate, so a
+  change to the pipeline, the writer or the hand-off is measured against the same stream
+  rather than argued about: 480 pictures decode at about 2000 frames a second on the
+  development machine, including the pipeline start.
 - [MIGRATION.md](MIGRATION.md): what moved between 0.2 and 0.3.
 
 ### Removed

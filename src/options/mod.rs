@@ -125,15 +125,19 @@ impl Default for Options {
 }
 
 impl Options {
-    /// Sinks named explicitly, with the environment otherwise ignored.
+    /// Sinks named explicitly, and nothing read from the environment.
     ///
-    /// This is what a test uses: a run that wrote to whatever the machine's
-    /// environment said would test the machine.
+    /// This is what a test uses: a run that wrote to whatever the machine's environment
+    /// said would test the machine. Warming is off here and only
+    /// [Options::with_warm_video] turns it on, so `AIRPLAY_GST_VIDEO_WARM` cannot change
+    /// what this constructor builds.
     pub fn new(audio_sink: impl Into<String>, video_sink: impl Into<String>) -> Self {
         Self {
             audio_sink: Some(audio_sink.into()),
             video_sink: Some(video_sink.into()),
-            ..Self::default()
+            h264: h264_chain(),
+            h265: h265_chain(),
+            warm_video: false,
         }
     }
 

@@ -43,8 +43,9 @@ rust-airplay-gstream = "0.3"
 | 无 | `with_video_chain(codec, parser, decoder)` |
 | `with_warm_video()` | `with_warm_video(bool)` |
 
-另有 `Options::new(audio_sink, video_sink)`，供两个 sink 都显式命名、且不想查环境变量的调用方；
-`Options::chain(codec)` 返回某种编码将要使用的那条 `Chain`。
+另有 `Options::new(audio_sink, video_sink)`，供两个 sink 都显式命名、且不想查环境变量的调用方——
+0.3 里这是字面意思：预热默认关闭，只有 `with_warm_video` 才会打开，而 0.2 的等价写法仍会读
+`AIRPLAY_GST_VIDEO_WARM`。`Options::chain(codec)` 返回某种编码将要使用的那条 `Chain`。
 
 ```rust
 use rust_airplay::{VideoCodec, Volume};
@@ -81,12 +82,19 @@ assert!(GstRenderer::with_sinks("fakesink", "no-such-sink").is_err());
   `video_sink()` 与以前一致。
 - `with_warm_video` 仍在构造期预热；在没有 `gst-launch-1.0` 的机器上请求预热，构造函数会直接
   返回 `Unavailable`，而不是给出一个做不到的承诺。
+- 一条 warm 管线一次只交给一条流。上一条流还握着它时来了新会话，就结束旧管线另起一条，而不是共用
+  一根管道——两个写者会把两路 H.264 交织在一起。
 
 ## 错误
 
-`RenderError::Unavailable` 表示这台机器做不到：没有 launcher、sink 或解码器未安装、没有声卡。
-`Failed` 表示管线接受了请求然后失败。0.2 把「视频元素缺失」报成 `Failed`，现在这类会话拿到的是
-`Unavailable`，按两者分支的代码可能需要换一个臂。
+`RenderError::Unavailable` 表示这台机器做不到：没有 launcher、sink 或解码器未安装、没有声卡，
+或者是一个本后端没有对应描述的音频配置。`Failed` 表示管线接受了请求然后失败。0.2 把「视频元素
+缺失」报成 `Failed`，现在这类会话拿到的是 `Unavailable`；而启动之后才失败的音频管线报 `Failed`
+而不是 `Unavailable`，按两者分支的代码可能需要换一个臂。
+
+44.1 kHz 立体声以外的音频配置会被拒绝。两种编码的 `codec_data` 里都写死了这一配置，用别的采样率
+或声道数拼出来的 caps 前后矛盾、解码器读不对；核心 0.3 对本 crate 支持的所有格式都用 44.1 kHz
+立体声，所以正常的 0.3 会话不会碰到它。
 
 ## 流的生命周期
 

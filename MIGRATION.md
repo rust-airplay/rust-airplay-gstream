@@ -48,7 +48,9 @@ coding. It is now a value with one chain per coding.
 | `with_warm_video()` | `with_warm_video(bool)` |
 
 There is also `Options::new(audio_sink, video_sink)` for a caller that names both and wants
-no environment lookup, and `Options::chain(codec)` returns the `Chain` a coding will use.
+no environment lookup -- and in 0.3 that is literal: warming is off there and only
+`with_warm_video` turns it on, where 0.2's equivalent still read `AIRPLAY_GST_VIDEO_WARM`.
+`Options::chain(codec)` returns the `Chain` a coding will use.
 
 ```rust
 use rust_airplay::{VideoCodec, Volume};
@@ -89,13 +91,23 @@ rather than choosing an output.
 - `with_warm_video` still warms at construction, and a warm request on a machine without
   `gst-launch-1.0` is an `Unavailable` error from the constructor rather than a promise the
   renderer cannot keep.
+- A warm pipeline is handed to one stream at a time. A second session that arrives while the
+  first still holds it ends the old pipeline and starts its own, rather than sharing a pipe
+  whose two writers would interleave two H.264 streams.
 
 ## Errors
 
 `RenderError::Unavailable` means the machine cannot do it: no launcher, a sink or decoder not
-installed, no sound card. `Failed` means the pipeline accepted the request and then failed.
-0.2 reported a missing video element as `Failed`; a session that hits that now gets
-`Unavailable`, so code that branched on the two may need the other arm.
+installed, no sound card, or an audio configuration this backend has no description for.
+`Failed` means the pipeline accepted the request and then failed. 0.2 reported a missing
+video element as `Failed`; a session that hits that now gets `Unavailable`, and an audio
+pipeline that stops after it started reports `Failed` rather than `Unavailable`, so code that
+branched on the two may need the other arm.
+
+Audio configurations other than 44.1 kHz stereo are refused here. Both codings carry a fixed
+configuration inside `codec_data`, so caps that named another rate or channel count
+described a stream no decoder reads correctly; `Config` in core 0.3 uses 44.1 kHz stereo for
+every format this crate supports, so a 0.3 session does not hit it.
 
 ## Stream lifetime
 

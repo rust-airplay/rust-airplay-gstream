@@ -80,7 +80,9 @@ time to be reaped, and past either it is killed rather than waited for.
   timestamp is an RTP counter that wraps: a receiver that widened it would stop measuring
   elapsed time after a long session. The pipeline uses `sync=false` because a client's
   clock and a sound card's clock are not the same clock; waiting on one to schedule the other
-  is what makes a receiver stutter.
+  is what makes a receiver stutter. `appsrc` is told not to block, and the queue is bounded
+  from this side instead: a sink that stops draining turns into a refused frame that says so,
+  not into a receive thread that never returns and a queue that grows without limit.
 - **Volume** is a `volume` element directly in front of the sink. `Renderer::set_volume`
   stores the gain for streams opened later and sets the property of the element that is
   playing now. The core speaks linear gain, never decibels.
@@ -107,9 +109,11 @@ graphics device come up when the pipeline starts, not when the first frame arriv
 `warm_video` starts it with the receiver so the cost is paid before a client connects, and a
 warm pipeline is reused by the next session instead of being torn down. The renderer keeps its
 own handle on that pipeline as well as the stream's, so that closing a session leaves the
-pipeline running; only a coding it cannot play, or a process that has died, makes it start a
-new one. It is off by default because a warm pipeline is a window on screen before anything is
-mirrored, which a television does but a desktop application may not.
+pipeline running; only a coding it cannot play, a process that has died, or a session that
+still holds it makes it start a new one. A pipeline is handed to one stream at a time: a
+second writer on one pipe would interleave two H.264 streams, and the new session supersedes
+the old one. Warming is off by default because a warm pipeline is a window on screen before
+anything is mirrored, which a television does but a desktop application may not.
 
 ## Closing
 
@@ -159,3 +163,11 @@ is.
 cargo test                  # unit tests
 cargo test -- --ignored     # needs a GStreamer runtime
 ```
+
+`tests/throughput.rs` is the one that is not a gate: it replays the fixture ten times through
+the production pipeline and prints the frame rate (about 2000 pictures a second on the
+development machine, pipeline start included), so a change to the pipeline, the writer or the
+frame hand-off can be measured against the same stream instead of being argued about. A
+mirror sends about 30 a second, so the frame path is not where the latency is: opening a cold
+video pipeline costs about 165 ms, of which 150 ms is the deliberate wait for `gst-launch` to
+say it refused the description, and a warm one costs nothing measurable.

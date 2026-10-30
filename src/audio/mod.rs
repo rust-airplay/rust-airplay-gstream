@@ -20,3 +20,9 @@ mod graph;
 mod thread;
 
 pub(crate) use engine::GstAudio;
+/// How many coded bytes may wait in `appsrc` before a push says the pipeline is not
+/// draining.
+///
+/// About a second of AAC-ELD: enough for a decoder that is briefly busy, and small
+/// enough that a sink which has stopped cannot turn a session into a memory leak.
+pub(super) const MAX_QUEUED_AUDIO_BYTES: u64 = 64 * 1024;

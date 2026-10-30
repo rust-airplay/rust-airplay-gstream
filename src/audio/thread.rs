@@ -73,6 +73,10 @@ pub(super) fn run(
         // what its own buffers are.
         appsrc.set_caps(Some(&caps));
         appsrc.set_format(gst::Format::Time);
+        // A sink that stops draining must not block the receive thread: this side bounds
+        // the queue instead, and says so when the bound is reached (see engine::push).
+        appsrc.set_block(false);
+        appsrc.set_max_bytes(super::MAX_QUEUED_AUDIO_BYTES);
 
         // The guard is held for as long as the loop runs: dropping it removes the watch.
         let Some(bus) = pipeline.bus() else {

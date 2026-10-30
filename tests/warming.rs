@@ -118,6 +118,7 @@ fn a_warm_stream_opens_without_starting_a_pipeline() {
     let second = renderer.open_video(video()).expect("a second video stream");
     let warm_open = started.elapsed();
     play_one_frame(&*second);
+    println!("a cold stream opened in {cold_open:?}, a warm one in {warm_open:?}");
 
     assert!(
         warm_open * 2 < cold_open,
@@ -177,4 +178,37 @@ fn a_cold_stream_ends_its_pipeline_when_the_session_does() {
         .expect("a second stream starts its own pipeline");
     play_one_frame(&*reopened);
     reopened.close().expect("the session ends");
+}
+
+#[test]
+#[ignore = "needs a GStreamer runtime; see README.md"]
+fn a_second_warm_session_does_not_share_one_pipe() {
+    // Two writers on one pipe interleave two H.264 streams, and neither decodes. A new
+    // session supersedes the old one -- the core keeps one media session -- so the warm
+    // pipeline is handed to exactly one stream at a time and the old one is ended.
+    let renderer = opener(true);
+    let first = renderer.open_video(video()).expect("a first stream");
+    play_one_frame(&*first);
+    assert!(renderer.video_is_warm(), "the first pipeline is kept");
+
+    let second = renderer.open_video(video()).expect("a second stream");
+    play_one_frame(&*second);
+
+    // The first session's pipeline was stopped, so its next frame says so rather than
+    // being written into a pipe somebody else now owns.
+    let error = first
+        .push(VideoFrame {
+            data: FIXTURE[..1_024].to_vec(),
+            timestamp: 1,
+            keyframe: false,
+        })
+        .expect_err("the superseded pipeline is gone");
+    println!("the superseded stream reports: {error}");
+
+    assert!(
+        renderer.video_is_warm(),
+        "the second stream owns the warm pipeline now"
+    );
+    second.close().expect("the second session ends");
+    let _ = first.close();
 }

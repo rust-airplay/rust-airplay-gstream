@@ -16,6 +16,7 @@ use gstreamer::prelude::*;
 use gstreamer_app::AppSrc;
 use rust_airplay::{AudioConfig, AudioFrame, AudioStream, RenderError};
 
+use super::MAX_QUEUED_AUDIO_BYTES;
 use super::clock::{elapsed_samples, relative_nanos};
 use super::graph::{audio_caps, audio_description};
 use super::thread::{Failure, Opened, run};
@@ -108,7 +109,7 @@ impl GstAudio {
             .recv()
             .map_err(|_| RenderError::Failed("the audio pipeline died at startup".to_owned()))?
             .map_err(RenderError::Unavailable)?;
-        Ok(Self {
+        let stream = Self {
             appsrc: opened.appsrc,
             volume: opened.volume,
             pipeline: opened.pipeline,
@@ -120,7 +121,15 @@ impl GstAudio {
             first_timestamp: Mutex::new(None),
             sample_rate: config.sample_rate.max(1),
             closed: AtomicBool::new(false),
-        })
+        };
+        // A pipeline can fail between the moment it reaches PLAYING and the moment its
+        // handle is handed over. Reporting it now means the session says so once, at open,
+        // instead of at every frame it pushes into a stream that plays nothing.
+        if let Some(reason) = stream.failed() {
+            stream.stop_pipeline();
+            return Err(RenderError::Failed(reason));
+        }
+        Ok(stream)
     }
 
     /// The element a later volume change is applied to.
@@ -140,10 +149,16 @@ impl GstAudio {
         }
         if let Some(done) = lock(&self.done).take() {
             if done.recv_timeout(STOP_TIMEOUT).is_err() {
+                // A pipeline left in PAUSED with a device open is the case stopping is
+                // for, so it is forced to NULL from here and given one more moment.
                 log::warn!(
-                    "the audio pipeline did not stop within {}s",
+                    "the audio pipeline did not stop within {}s; forcing it to NULL",
                     STOP_TIMEOUT.as_secs()
                 );
+                let _ = self.pipeline.set_state(gst::State::Null);
+                if done.recv_timeout(Duration::from_secs(1)).is_err() {
+                    log::warn!("the audio pipeline thread is still running");
+                }
             }
         }
     }
@@ -155,11 +170,23 @@ impl AudioStream for GstAudio {
             return Err(RenderError::Failed("the audio stream is closed".to_owned()));
         }
         if let Some(reason) = self.failed() {
-            return Err(RenderError::Unavailable(reason));
+            // The pipeline started and then failed: that is a request that could not be
+            // carried out, not a machine that cannot serve the stream.
+            return Err(RenderError::Failed(reason));
         }
         // One buffer, one frame. This is the whole of the delivery rule, and the reason
         // this stream is not a subprocess: a byte stream cannot say where a frame ends,
         // and a decoder given a run of frames reads only the first one.
+        //
+        // `appsrc` is configured not to block (see the module that builds the pipeline),
+        // so a sink that stopped draining would let this queue grow instead of hanging
+        // the receive thread; the bound is therefore enforced here.
+        let queued = self.appsrc.current_level_bytes();
+        if queued.saturating_add(frame.data.len() as u64) > MAX_QUEUED_AUDIO_BYTES {
+            return Err(RenderError::Failed(format!(
+                "the audio pipeline is not draining: {queued} bytes are already queued"
+            )));
+        }
         let mut buffer = gst::Buffer::from_slice(frame.data);
         if let Some(buffer) = buffer.get_mut() {
             // Presentation time is measured from the stream's first frame, not from the

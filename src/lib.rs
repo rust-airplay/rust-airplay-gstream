@@ -77,7 +77,7 @@ pub mod testing {
     /// the description, or it stopped before the bytes were written.
     pub fn feed(program: &str, args: &[String], bytes: &[u8]) -> Result<(), String> {
         let pipeline = Pipeline::start(program, args).map_err(reason)?;
-        if let Err(error) = pipeline.push(bytes) {
+        if let Err(error) = pipeline.push(bytes.to_vec()) {
             pipeline.abort();
             return Err(reason(error));
         }

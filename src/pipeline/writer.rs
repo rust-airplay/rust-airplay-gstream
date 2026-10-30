@@ -6,11 +6,15 @@
 //! a thread of its own, behind a queue a few buffers deep: a push hands one buffer over
 //! and waits for that buffer to be taken, so a decoder that has stopped reading becomes
 //! a refused frame rather than a session that never returns.
+//!
+//! Every wait here has a deadline, including the wait for room in the queue: a full queue
+//! means the writer thread is stuck in a write, so offering it another job is the same
+//! wait as the write itself, and it has to give up the same way.
 
 use std::io::Write;
 use std::process::{Child, ChildStdin, Command, Stdio};
-use std::sync::mpsc::{Receiver, Sender, SyncSender};
-use std::time::Duration;
+use std::sync::mpsc::{Receiver, Sender, SyncSender, TrySendError};
+use std::time::{Duration, Instant};
 
 use super::LaunchError;
 use super::stderr::StderrFile;
@@ -68,34 +72,41 @@ impl Writer {
                 reason: error.to_string(),
             })?;
         let Some(stdin) = child.stdin.take() else {
+            let _ = child.kill();
+            let _ = child.wait();
             return Err(LaunchError::StartFailed {
                 reason: "the pipeline has no standard input".to_owned(),
             });
         };
         let (jobs, receiving) = std::sync::mpsc::sync_channel::<Job>(QUEUE);
-        std::thread::Builder::new()
+        if let Err(error) = std::thread::Builder::new()
             .name("airplay-gst-writer".to_owned())
             .spawn(move || write_loop(stdin, receiving))
-            .map_err(|error| LaunchError::StartFailed {
+        {
+            // The child exists whether or not the thread does, and a pipeline with no
+            // writer is a process nobody will ever feed or stop.
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(LaunchError::StartFailed {
                 reason: format!("the pipeline writer cannot start: {error}"),
-            })?;
+            });
+        }
         Ok((child, Self { jobs }))
     }
 
     /// Writes one buffer of frames, waiting at most [`WRITE_TIMEOUT`] for the pipeline
     /// to take it.
     ///
+    /// The buffer is moved rather than copied: a 1080p frame is tens of kilobytes and a
+    /// session is tens of frames a second, which is worth not copying twice.
+    ///
     /// The error is what the pipeline said, or why the buffer was not taken in time.
-    pub(super) fn push(&self, frames: &[u8]) -> Result<(), String> {
+    pub(super) fn push(&self, frames: Vec<u8>) -> Result<(), String> {
+        let deadline = Instant::now() + WRITE_TIMEOUT;
         let (acknowledge, answer) = std::sync::mpsc::channel();
-        if self
-            .jobs
-            .send(Job::Data(frames.to_vec(), acknowledge))
-            .is_err()
-        {
-            return Err("the pipeline is no longer reading".to_owned());
-        }
-        match answer.recv_timeout(WRITE_TIMEOUT) {
+        enqueue(&self.jobs, Job::Data(frames, acknowledge), deadline)?;
+        let left = deadline.saturating_duration_since(Instant::now());
+        match answer.recv_timeout(left) {
             Ok(outcome) => outcome,
             Err(_) => Err(format!(
                 "the pipeline did not take a frame within {}s",
@@ -107,8 +118,35 @@ impl Writer {
     /// Closes the pipe, which is the end of stream for a source that reads a descriptor.
     pub(super) fn close(&self) {
         let (closed, closed_rx) = std::sync::mpsc::channel();
-        if self.jobs.send(Job::Close(closed)).is_ok() {
-            let _ = closed_rx.recv_timeout(CLOSE_TIMEOUT);
+        let deadline = Instant::now() + CLOSE_TIMEOUT;
+        if enqueue(&self.jobs, Job::Close(closed), deadline).is_ok() {
+            let _ = closed_rx.recv_timeout(deadline.saturating_duration_since(Instant::now()));
+        }
+    }
+}
+
+/// Hands a job to the writer thread, waiting at most until `deadline` for room in the
+/// queue.
+///
+/// This is the part that has to be bounded: `SyncSender::send` waits as long as the writer
+/// keeps the queue full, which is exactly as long as the pipeline refuses to read, which is
+/// the case this module exists to survive.
+fn enqueue(jobs: &SyncSender<Job>, mut job: Job, deadline: Instant) -> Result<(), String> {
+    loop {
+        match jobs.try_send(job) {
+            Ok(()) => return Ok(()),
+            Err(TrySendError::Full(returned)) => {
+                job = returned;
+                if Instant::now() >= deadline {
+                    return Err("the pipeline is not taking frames: its writer is still"
+                        .to_owned()
+                        + " queued behind a write");
+                }
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            Err(TrySendError::Disconnected(_)) => {
+                return Err("the pipeline is no longer reading".to_owned());
+            }
         }
     }
 }
@@ -131,5 +169,51 @@ fn write_loop(mut stdin: ChildStdin, jobs: Receiver<Job>) {
                 return;
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Job, Writer, enqueue};
+    use std::time::{Duration, Instant};
+
+    #[test]
+    fn a_full_queue_is_refused_rather_than_waited_out() {
+        // A writer that has not taken a single job is a pipeline that is not reading: the
+        // second job must give up by its deadline instead of blocking the caller for as
+        // long as the pipeline stays stuck.
+        let (jobs, _receiving) = std::sync::mpsc::sync_channel::<Job>(1);
+        let writer = Writer { jobs };
+        let (acknowledge, _answer) = std::sync::mpsc::channel();
+        enqueue(
+            &writer.jobs,
+            Job::Data(vec![1, 2, 3], acknowledge),
+            Instant::now() + Duration::from_secs(1),
+        )
+        .expect("the first job fits");
+        let (acknowledge, _answer) = std::sync::mpsc::channel();
+        let started = Instant::now();
+        let error = enqueue(
+            &writer.jobs,
+            Job::Data(vec![4, 5, 6], acknowledge),
+            started + Duration::from_millis(60),
+        )
+        .expect_err("a full queue is an error");
+        assert!(started.elapsed() < Duration::from_secs(2), "{error}");
+        assert!(error.contains("not taking frames"), "{error}");
+    }
+
+    #[test]
+    fn a_queue_with_no_writer_says_so() {
+        let (jobs, receiving) = std::sync::mpsc::sync_channel::<Job>(1);
+        drop(receiving);
+        let (acknowledge, _answer) = std::sync::mpsc::channel();
+        let error = enqueue(
+            &jobs,
+            Job::Data(Vec::new(), acknowledge),
+            Instant::now() + Duration::from_millis(50),
+        )
+        .expect_err("a dropped writer is an error");
+        assert!(error.contains("no longer reading"), "{error}");
     }
 }

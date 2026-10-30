@@ -204,9 +204,16 @@ impl Renderer for GstRenderer {
         let mut kept = lock(&self.warm);
         if let Some((pipeline, codec)) = kept.as_ref() {
             if *codec == config.codec && pipeline.is_running() {
-                // The pipeline a previous session left behind, still decoding and still
-                // showing what it was told to last.
-                return Ok(Box::new(GstVideo::adopted(Arc::clone(pipeline))));
+                if !pipeline.is_claimed() {
+                    // The pipeline a previous session left behind, still decoding and
+                    // still showing what it was told to last.
+                    return Ok(Box::new(GstVideo::adopted(Arc::clone(pipeline))));
+                }
+                // A stream still holds it, so a second session would interleave two
+                // H.264 streams into one pipe, which decodes as neither. A new session
+                // supersedes the old one: the old pipeline is ended here, and its
+                // stream's next push says why.
+                pipeline.abort();
             }
         }
         // A pipeline for another coding, or one that stopped while it waited.
