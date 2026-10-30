@@ -34,11 +34,7 @@ jobs:
 
       # Linking the crate needs pkg-config to find gstreamer-1.0 even for `cargo check`.
       - name: Install the GStreamer development libraries
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            libgstreamer1.0-dev \
-            libgstreamer-plugins-base1.0-dev
+        run: bash tools/install-gstreamer.sh dev
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -72,6 +68,9 @@ jobs:
   # The integration tests are `#[ignore]`d on purpose: they need a GStreamer runtime
   # with decoders, which a bare machine does not have. This job is the machine that has
   # one, so it runs them instead of skipping them.
+  # 22.04 on purpose: it ships GStreamer 1.20, so the runtime tests cover the oldest
+  # GStreamer this crate is expected to work on, while the other Linux jobs build against
+  # the distribution's current one.
   test-linux:
     name: test (linux, GStreamer runtime)
     runs-on: ubuntu-22.04
@@ -81,17 +80,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Install GStreamer with its decoders
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            libgstreamer1.0-dev \
-            libgstreamer-plugins-base1.0-dev \
-            gstreamer1.0-plugins-base \
-            gstreamer1.0-plugins-good \
-            gstreamer1.0-plugins-bad \
-            gstreamer1.0-plugins-ugly \
-            gstreamer1.0-libav \
-            gstreamer1.0-tools
+        run: bash tools/install-gstreamer.sh runtime
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -205,11 +194,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Install the GStreamer development libraries
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            libgstreamer1.0-dev \
-            libgstreamer-plugins-base1.0-dev
+        run: bash tools/install-gstreamer.sh dev
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable

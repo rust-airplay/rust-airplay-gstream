@@ -86,6 +86,12 @@ breaking change because the public surface is smaller than 0.2's.
   fixture assertion, and `cargo publish --dry-run` before the real one.
 - **The integration tests run in CI**, on Linux and Windows, with the plugins they need
   installed and `gst-inspect-1.0` assertions that they are. 0.2 ran only the unit tests.
+- **[tools/install-gstreamer.sh](tools/install-gstreamer.sh)** installs those packages on
+  Ubuntu. The image ships LLVM's `libunwind-<version>-dev`, which GNU `libunwind-dev` -- a
+  dependency of `libgstreamer1.0-dev` -- conflicts with, and apt will not remove installed
+  packages to satisfy a dependency: it reported the dependency as unsatisfiable and exited
+  100. The script removes those packages first, and keeps a repair-and-retry for the same
+  symptom from other causes.
 - **`Chain`**, and the `AUDIO_SINKS`, `VIDEO_SINKS`, `MAX_PACE_SECONDS` and
   `MAX_VIDEO_FRAME_BYTES` constants are public.
 - [MIGRATION.md](MIGRATION.md): what moved between 0.2 and 0.3.
