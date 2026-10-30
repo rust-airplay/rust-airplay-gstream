@@ -93,7 +93,9 @@ jobs:
       - name: Check the runtime the ignored tests need
         run: |
           gst-launch-1.0 --version
+          pkg-config --modversion gstreamer-1.0
           gst-inspect-1.0 fakesink > /dev/null
+          gst-inspect-1.0 h264parse > /dev/null
           gst-inspect-1.0 avdec_h264 > /dev/null
           gst-inspect-1.0 avdec_aac > /dev/null
 
@@ -170,6 +172,7 @@ jobs:
           & $env:PKG_CONFIG --cflags gstreamer-1.0
           gst-launch-1.0 --version
           gst-inspect-1.0 fakesink | Select-Object -First 3
+          gst-inspect-1.0 h264parse | Select-Object -First 3
           gst-inspect-1.0 avdec_h264 | Select-Object -First 3
           gst-inspect-1.0 avdec_aac | Select-Object -First 3
 

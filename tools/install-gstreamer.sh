@@ -56,7 +56,11 @@ if [ -n "$conflicting" ]; then
   echo "removing the LLVM libunwind development packages that conflict with libunwind-dev: $conflicting"
   # Word splitting is the point: one name per line, one argument each.
   # shellcheck disable=SC2086
-  sudo apt-get remove -y $conflicting
+  if ! sudo apt-get remove -y $conflicting; then
+    # A removal that cannot happen is not the end: the install below is what has to
+    # work, and its retry prints what apt resolved. Failing here would hide that.
+    echo "::warning::could not remove $conflicting; the install may still fail on libunwind-dev"
+  fi
 fi
 
 held="$(apt-mark showhold || true)"
