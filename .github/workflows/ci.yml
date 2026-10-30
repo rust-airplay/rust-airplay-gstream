@@ -4,37 +4,131 @@ on:
   push:
   pull_request:
 
+# Nothing here writes to the repository: read-only is the whole permission set the
+# workflows need.
 permissions:
   contents: read
 
+# A second push to the same branch supersedes the first: the older run answers a
+# question nobody is asking any more.
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+  # The runtime tests open real pipelines, and a CI machine has neither a display nor a
+  # sound card. Both sinks are the ones that accept everything and need no device.
+  AIRPLAY_GST_VIDEO_SINK: fakesink
+  AIRPLAY_GST_AUDIO_SINK: fakesink
+
 jobs:
-  test:
-    name: ${{ matrix.os }}
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 45
-    strategy:
-      fail-fast: false
-      matrix:
-        os:
-          - ubuntu-latest
-          - windows-latest
+  lint:
+    name: lint (fmt, clippy, MSRV, docs)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
     steps:
       - name: Check out the repository
         uses: actions/checkout@v4
 
-      - name: Install GStreamer (Linux)
-        if: runner.os == 'Linux'
+      # Linking the crate needs pkg-config to find gstreamer-1.0 even for `cargo check`.
+      - name: Install the GStreamer development libraries
         run: |
           sudo apt-get update
-          sudo apt-get install -y libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev
+          sudo apt-get install -y --no-install-recommends \
+            libgstreamer1.0-dev \
+            libgstreamer-plugins-base1.0-dev
 
-      - name: Install GStreamer (Windows)
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache the build
+        uses: Swatinem/rust-cache@v2
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      - name: Run clippy
+        run: cargo clippy --all-targets -- -D warnings
+
+      # `rust-version` in Cargo.toml is a promise to every dependent that has not moved to
+      # a newer toolchain; this is the only job that can break it, so it runs here.
+      - name: Check the minimum supported Rust version
+        run: |
+          rustup toolchain install 1.85.0 --profile minimal
+          cargo +1.85.0 check --all-targets
+
+      - name: Build the documentation
+        env:
+          RUSTDOCFLAGS: -D warnings
+        run: cargo doc --no-deps
+
+      - name: Run the doctests
+        run: cargo test --doc
+
+  # The integration tests are `#[ignore]`d on purpose: they need a GStreamer runtime
+  # with decoders, which a bare machine does not have. This job is the machine that has
+  # one, so it runs them instead of skipping them.
+  test-linux:
+    name: test (linux, GStreamer runtime)
+    runs-on: ubuntu-22.04
+    timeout-minutes: 45
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Install GStreamer with its decoders
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libgstreamer1.0-dev \
+            libgstreamer-plugins-base1.0-dev \
+            gstreamer1.0-plugins-base \
+            gstreamer1.0-plugins-good \
+            gstreamer1.0-plugins-bad \
+            gstreamer1.0-plugins-ugly \
+            gstreamer1.0-libav \
+            gstreamer1.0-tools
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache the build
+        uses: Swatinem/rust-cache@v2
+
+      # If a plugin package stops shipping a decoder, the tests below would skip
+      # themselves and the job would still pass: this step is what makes that loud.
+      - name: Check the runtime the ignored tests need
+        run: |
+          gst-launch-1.0 --version
+          gst-inspect-1.0 fakesink > /dev/null
+          gst-inspect-1.0 avdec_h264 > /dev/null
+          gst-inspect-1.0 avdec_aac > /dev/null
+
+      - name: Run the tests
+        run: cargo test --all-targets
+
+      # One at a time: these start real pipelines, and a runner has four cores.
+      - name: Run the ignored tests against the real runtime
+        run: cargo test --all-targets -- --ignored --test-threads=1
+
+  # The MSYS2 GStreamer libraries are MinGW builds, so the Windows job links with the GNU
+  # Rust toolchain rather than the MSVC one the runner installs by default. pkg-config and
+  # PKG_CONFIG_PATH are set here for the same reason they are in the documented Windows
+  # setup: the `*-sys` crates would otherwise not find the libraries.
+  test-windows:
+    name: test (windows, GStreamer runtime)
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Install GStreamer with its decoders (MSYS2 UCRT64)
         id: msys2
-        if: runner.os == 'Windows'
         uses: msys2/setup-msys2@v2
         with:
           msystem: UCRT64
@@ -42,13 +136,16 @@ jobs:
           install: >-
             mingw-w64-ucrt-x86_64-gstreamer
             mingw-w64-ucrt-x86_64-gst-plugins-base
+            mingw-w64-ucrt-x86_64-gst-plugins-good
+            mingw-w64-ucrt-x86_64-gst-plugins-bad
+            mingw-w64-ucrt-x86_64-gst-plugins-ugly
+            mingw-w64-ucrt-x86_64-gst-libav
             mingw-w64-ucrt-x86_64-pkgconf
             mingw-w64-ucrt-x86_64-gcc
 
-      # The MSYS2 GStreamer libraries are MinGW builds, so the Windows job links with the
-      # GNU Rust toolchain rather than the MSVC one the runner installs by default.
-      - name: Prepare the GNU toolchain (Windows)
-        if: runner.os == 'Windows'
+      # The tool binaries (gst-launch-1.0, gst-inspect-1.0) and the DLLs the test
+      # executables load both live in <prefix>/bin, which is put on PATH here as well.
+      - name: Prepare pkg-config and the GStreamer runtime (Windows)
         shell: pwsh
         run: |
           $msys2 = '${{ steps.msys2.outputs.msys2-location }}'
@@ -64,47 +161,113 @@ jobs:
           (Join-Path $prefix 'bin') | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
           "PKG_CONFIG=$pkgconf" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           "PKG_CONFIG_PATH=$(Join-Path $prefix 'lib\pkgconfig')" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "GST_PLUGIN_PATH=$(Join-Path $prefix 'lib\gstreamer-1.0')" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
-
-      - name: Check pkg-config (Windows)
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          & $env:PKG_CONFIG --version
-          & $env:PKG_CONFIG --cflags glib-2.0
-
-      - name: Install Rust (Linux)
-        if: runner.os == 'Linux'
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt, clippy
-
-      - name: Install Rust (Windows)
-        if: runner.os == 'Windows'
+      # The -sys crates link against MinGW-built libraries, so they need the GNU target.
+      - name: Install Rust (GNU toolchain)
         uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: stable-x86_64-pc-windows-gnu
-          components: rustfmt, clippy
 
       - name: Select the GNU toolchain (Windows)
-        if: runner.os == 'Windows'
         shell: pwsh
         run: |
           "RUSTUP_TOOLCHAIN=stable-x86_64-pc-windows-gnu" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
+      - name: Check pkg-config and the runtime (Windows)
+        shell: pwsh
+        run: |
+          & $env:PKG_CONFIG --version
+          & $env:PKG_CONFIG --cflags gstreamer-1.0
+          gst-launch-1.0 --version
+          gst-inspect-1.0 fakesink | Select-Object -First 3
+          gst-inspect-1.0 avdec_h264 | Select-Object -First 3
+          gst-inspect-1.0 avdec_aac | Select-Object -First 3
+
       - name: Cache the build
         uses: Swatinem/rust-cache@v2
 
-      - name: Check formatting
-        run: cargo fmt --all -- --check
-
       - name: Run the tests
-        run: cargo test
+        run: cargo test --all-targets
 
-      - name: Run clippy
-        run: cargo clippy --all-targets -- -D warnings
+      - name: Run the ignored tests against the real runtime
+        run: cargo test --all-targets -- --ignored --test-threads=1
 
-      - name: Build the documentation
-        env:
-          RUSTDOCFLAGS: -D warnings
-        run: cargo doc --no-deps
+  # The tests compile the captured fixtures in with `include_bytes!`, so a `.crate` that
+  # ships without them cannot even be tested by whoever downloads it. `include` in
+  # Cargo.toml decides what ships, and this job is what keeps that list honest.
+  package:
+    name: package (published crate contents)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Install the GStreamer development libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libgstreamer1.0-dev \
+            libgstreamer-plugins-base1.0-dev
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache the build
+        uses: Swatinem/rust-cache@v2
+
+      # The listing is what `cargo package` would put in the .crate: on this Linux runner it
+      # uses forward slashes, so the fixtures can be matched by their repository paths.
+      - name: Require the fixtures to be in the package
+        run: |
+          set -euo pipefail
+          cargo package --list --allow-dirty > "$RUNNER_TEMP/package-list.txt"
+          if ! grep -q '^tests/fixtures/' "$RUNNER_TEMP/package-list.txt"; then
+            echo "::error::the packaged crate has no tests/fixtures/**; the integration tests include_bytes! those files"
+            exit 1
+          fi
+          for fixture in tests/fixtures/mirror-first-audio.eld tests/fixtures/mirror-first-frames.h264; do
+            if ! grep -qx "$fixture" "$RUNNER_TEMP/package-list.txt"; then
+              echo "::error::$fixture is missing from the packaged crate"
+              exit 1
+            fi
+          done
+
+      # No --allow-dirty: the .crate must be packable from the tree that was pushed.
+      - name: Build the package
+        run: cargo package --no-verify
+
+      # `cargo package --no-verify` does not compile anything, so the packaged tests are
+      # built here, from the tarball itself rather than from the repository.
+      - name: Build the packaged tests
+        run: |
+          set -euo pipefail
+          crate=$(ls -t target/package/*.crate | head -n 1)
+          mkdir -p packaged
+          tar -xzf "$crate" -C packaged
+          directory=$(find packaged -mindepth 1 -maxdepth 1 -type d | head -n 1)
+          ( cd "$directory" && cargo test --no-run --all-targets )
+
+      - name: Upload the crate
+        uses: actions/upload-artifact@v4
+        with:
+          name: crate
+          path: target/package/*.crate
+          if-no-files-found: error
+
+  # Supply chain: advisories against the resolved tree, the license allow list, and where
+  # every crate came from. `deny.toml` carries the policy.
+  deny:
+    name: cargo-deny (advisories, licenses, bans, sources)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Check the dependency tree
+        uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check
+          arguments: --all-features

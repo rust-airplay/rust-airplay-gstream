@@ -12,18 +12,24 @@ the core for the protocol and on this crate for playback.
 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) explains why the two media take different
 shapes, what happens to a frame, and what a flush can and cannot do here.
 
+[CHANGELOG.md](CHANGELOG.md) records what 0.3 changed, and [MIGRATION.md](MIGRATION.md) maps a
+0.2 build onto it.
+
 ## Requirements
 
 **Building** needs the GStreamer development files, found with `pkg-config`: `gstreamer-1.0`
 and `gstreamer-app-1.0`.
 
-**Running** needs the GStreamer runtime, its plugins, and `gst-launch-1.0` on `PATH` for the
-video path:
+**Running** needs the GStreamer runtime and its plugins:
 
 | Purpose | Elements or program |
 | --- | --- |
-| Video | `gst-launch-1.0`, `h264parse` or `h265parse`, `avdec_h264` or `avdec_h265` (or the Direct3D11 pair), `videoconvert`, a sink |
+| Video | `gst-launch-1.0`, `h264parse` or `h265parse`, `avdec_h264` or `avdec_h265`, a sink |
 | Audio | `avdec_aac` or `avdec_alac`, `audioconvert`, `audioresample`, a sink |
+
+The `avdec_*` decoders come from `gst-libav`. To run only audio, a machine needs no
+`gst-launch-1.0`: the renderer builds, audio plays, and a video request reports that it is
+unavailable.
 
 On Windows, MSYS2 UCRT64 provides both; put `C:\msys64\ucrt64\bin` on `PATH`. On Debian and
 Ubuntu, `libgstreamer1.0-dev` and `libgstreamer-plugins-base1.0-dev` build it, and the plugin
@@ -33,8 +39,8 @@ packages for the elements above run it.
 
 ```toml
 [dependencies]
-rust-airplay = "0.2"
-rust-airplay-gstream = "0.2"
+rust-airplay = "0.3"
+rust-airplay-gstream = "0.3"
 ```
 
 ```rust,no_run
@@ -51,62 +57,95 @@ rust_airplay::run(config).await?;
 # }
 ```
 
-Both crates are on crates.io. `rust-airplay-gstream` depends on the core's 0.2 line, so a
+Both crates are on crates.io. `rust-airplay-gstream` follows the core's 0.3 line, so a
 `Cargo.lock` resolves the pair together.
 
 ## Options
 
-Everything a caller can choose is a field of `Options`:
+Everything a caller can choose is part of `Options`, and every default is what the
+corresponding environment variable would produce, so `Options::default` behaves exactly like
+`GstRenderer::new`:
 
-| Field | Meaning | Default |
+| Method | Meaning | Default |
 | --- | --- | --- |
-| `audio_sink` | GStreamer audio sink | `wasapisink` on Windows, the first available of `auto`, `oss`, `alsa`, `pulse` elsewhere |
-| `video_sink` | GStreamer video sink | `d3d11videosink` where it exists, `autovideosink` otherwise |
-| `video_parser` | parser the mirror pipeline starts with | `h264parse`, or `h265parse` for HEVC |
-| `video_decoder` | decoder and any converter it needs | chosen with the sink |
-| `warm_video` | start the video pipeline with the receiver | off |
+| `Options::new(audio, video)` | the two sinks, spelled out | -- |
+| `.with_audio_sink(sink)` | GStreamer audio sink | first installed of `wasapisink`, `autoaudiosink`, `osssink`, `alsasink`, `pulsesink`, `fakesink` |
+| `.with_video_sink(sink)` | GStreamer video sink | first installed of `d3d11videosink`, `autovideosink`, `glimagesink`, `fakesink` |
+| `.with_video_chain(codec, parser, decoder)` | the parser and decoder for H.264 or H.265 | `h264parse` + `avdec_h264`, `h265parse` + `avdec_h265` |
+| `.with_warm_video(bool)` | keep the video pipeline between sessions | off |
 
-Each default is what the corresponding environment variable would produce, so `Options::default`
-behaves exactly like `GstRenderer::new`. `Options::with_video_sink` replaces the sink and the
-decoder chain together, because `d3d11h264dec` decodes into memory that only
-`d3d11videosink` accepts; naming one without the other is how a hardware sink ends up fed by a
-software decoder.
+A sink is an element and, optionally, its properties -- `fakesink`, or
+`filesink location=out.raw`. It is checked when the renderer is built: the element must exist,
+and the fragment must be a single element rather than a pipeline of its own, so a sink cannot
+pull `!`-separated elements or another sink into the pipeline this backend builds.
+
+```rust
+use rust_airplay::{Renderer, VideoCodec};
+use rust_airplay_gstream::{GstRenderer, Options};
+
+let renderer = GstRenderer::with_options(
+    Options::new("fakesink", "filesink location=out.raw")
+        .with_video_chain(VideoCodec::H265, "h265parse", "avdec_h265")
+        .with_warm_video(true),
+)?;
+# Ok::<(), rust_airplay::RenderError>(())
+```
 
 ## Environment
 
 | Variable | Effect |
 | --- | --- |
 | `AIRPLAY_GST_LAUNCH` | the `gst-launch-1.0` executable to run |
-| `AIRPLAY_GST_AUDIO_SINK` | audio sink; `wasapisink` on Windows |
-| `AIRPLAY_GST_VIDEO_SINK` | video sink; `d3d11videosink` where it exists, `autovideosink` otherwise |
-| `AIRPLAY_GST_VIDEO_WARM` | set to `1` to start the video pipeline with the receiver |
-| `AIRPLAY_GST_KEEP_STDERR` | keep the subprocess's error output instead of deleting it, and print its path |
+| `AIRPLAY_GST_AUDIO_SINK` | audio sink, as a fragment |
+| `AIRPLAY_GST_VIDEO_SINK` | video sink, as a fragment |
+| `AIRPLAY_GST_VIDEO_WARM` | `1` (or any value but `0`/`false`/`no`/`off`) keeps the video pipeline between sessions |
+| `AIRPLAY_GST_KEEP_STDERR` | keep the subprocess's output instead of deleting it, and log its path |
+
+`Options` reads these when it is constructed, so a program that wants to choose in code
+uses `Options::new` and the `with_*` methods instead.
 
 ## What it does with the stream
 
-- **Video** is written to the pipeline in the order it was pushed. The subprocess gets a byte
-  stream, so timestamps do not cross into it; pacing happens here, when the core asks for it.
-- **Audio** keeps its timestamps: each frame is an `appsrc` buffer whose presentation time comes
-  from the client's sample counter, and the sink plays it at the captured rate.
+- **Video** is written to the subprocess in the order it was pushed. A byte stream carries no
+  timestamps, so pacing happens here, in `VideoStream::set_pace`.
+- **Audio** keeps its timing: each frame is an `appsrc` buffer whose presentation time is its
+  sample offset from the first frame of the session, at the session's sample rate.
 - **Volume** is a linear gain on a `volume` element in front of the sink, applied to the stream
   that is playing and remembered for the next one.
+- **flush** drops what is queued: audio goes back to `READY` and starts again, and video replaces
+  the decoder process, which is the only way to make a decoder forget its queue. The key frame a
+  client sends after a flush is what makes the new decoder correct rather than merely empty.
+
+## Failure
+
+`RenderError::Unavailable` means the machine cannot do it: no `gst-launch-1.0`, a sink or
+decoder element that is not installed, no GStreamer runtime. `RenderError::Failed` means the
+request could not be carried out: a description the program refused, a pipeline that stopped.
+The receiver reports either and keeps serving; a backend that retried inside itself would be
+hiding its own failures.
 
 ## Tests
 
 ```sh
-cargo test
-cargo test -- --ignored
+cargo test                          # unit tests, no GStreamer needed
+cargo test -- --ignored             # needs a GStreamer runtime and gst-launch-1.0
 ```
 
-The ignored tests need a GStreamer runtime and a `gst-launch-1.0`. They decode frames captured
-from a real session, which is what makes them useful: a pipeline can accept every buffer and
-still decode none, and only the decoded output settles that question.
+The integration tests decode a fixture and count the frames: a pipeline can accept every buffer
+and still decode none, and only decoded output settles that. The video fixture is synthetic --
+`videotestsrc` through `openh264enc`, 640x360, 48 pictures -- so it carries no captured screen,
+and [tools/make-fixtures.sh](tools/make-fixtures.sh) regenerates it byte for byte. The audio
+fixture is forty raw AAC-ELD payloads from a real session, which is kept because no AAC-ELD
+encoder exists to synthesize them. [`tests/fixtures/README.md`](tests/fixtures/README.md) records
+what each file is and how to reproduce it.
 
 ## Releasing
 
-`Publish to crates.io` is a manual workflow. It needs the `CARGO_REGISTRY_TOKEN` repository
-secret, runs from `main`, and accepts `dry_run`. Publish the core release it depends on
-first: Cargo resolves `rust-airplay = "0.2"` from crates.io while packaging this crate.
+Publishing is a workflow that runs from a tag, `vX.Y.Z`, whose version matches `Cargo.toml`. It
+refuses a dirty tree, runs the full test suite including the ignored tests, checks that the
+packaged `.crate` contains the fixtures, and dry-runs the publish before publishing with the
+`CARGO_REGISTRY_TOKEN` repository secret. Publish the core release this crate depends on first:
+Cargo resolves `rust-airplay = "0.3"` from crates.io while packaging this one.
 
 ## Licence
 

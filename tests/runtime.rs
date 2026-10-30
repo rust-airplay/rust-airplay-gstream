@@ -11,8 +11,10 @@
 //! the pipeline reads. `fakesink` is the sink for that, because it accepts everything and
 //! needs no device.
 
-use rust_airplay::{AudioCodec, AudioConfig, Renderer, VideoConfig, VideoFrame, Volume};
-use rust_airplay_gstream::{GstRenderer, pipeline};
+use rust_airplay::{
+    AudioCodec, AudioConfig, Renderer, VideoCodec, VideoConfig, VideoFrame, Volume,
+};
+use rust_airplay_gstream::{GstRenderer, testing};
 
 /// This machine's renderer, or `None` when it has no runtime to render with.
 fn runtime() -> Option<GstRenderer> {
@@ -27,7 +29,7 @@ fn runtime() -> Option<GstRenderer> {
 
 /// The program to run pipelines in, if this machine has one.
 fn launcher() -> Option<String> {
-    match pipeline::find_launcher() {
+    match testing::launcher() {
         Ok(program) => Some(program),
         Err(error) => {
             eprintln!("skipping: {error}");
@@ -42,10 +44,17 @@ fn a_launcher_is_found_and_a_renderer_starts() {
     let Some(renderer) = runtime() else {
         return;
     };
-    assert!(
-        !renderer.program().is_empty(),
-        "a renderer names its program"
-    );
+    // Video needs a program to run; a machine without one still renders audio, so a
+    // renderer that started without it is a renderer whose video is unavailable rather
+    // than one that did not start.
+    if let Some(program) = renderer.program() {
+        assert!(
+            program.contains("gst-launch"),
+            "a renderer names the program it runs: {program}"
+        );
+    } else {
+        eprintln!("this machine has no gst-launch, so video would be unavailable");
+    }
     assert!(
         !renderer.audio_sink().is_empty() && !renderer.video_sink().is_empty(),
         "and the sinks it will use"
@@ -74,8 +83,8 @@ fn every_coding_of_the_boundary_has_a_description_the_runtime_accepts() {
             !text.contains("erroneous pipeline"),
             "{codec:?}'s description was refused by gst-launch itself: {text}"
         );
-        // Anything else is this machine lacking a decoder for it, which the architecture document calls an
-        // environment problem and this test reports rather than fails on.
+        // Anything else is this machine lacking a decoder for it, which is an
+        // environment problem and reported rather than failed on.
         eprintln!("{codec:?} has no decoder on this machine: {text}");
     }
 }
@@ -91,10 +100,8 @@ fn a_wav_signal_written_to_the_pipe_comes_out_the_other_side() {
     };
     let wav = wav_file(&pcm_sine(44_100));
     let description = "fdsrc ! audio/x-wav ! wavparse ! audioconvert ! fakesink sync=false";
-    let pipe = pipeline::Pipeline::start(&program, description).expect("a pipeline");
-    pipe.write(&wav).expect("the signal");
-    pipe.finish()
-        .expect("the pipeline played every byte it was given");
+    let args: Vec<String> = description.split_whitespace().map(str::to_owned).collect();
+    testing::feed(&program, &args, &wav).expect("the pipeline played every byte it was given");
 }
 
 #[test]
@@ -107,7 +114,7 @@ fn the_video_pipeline_accepts_annex_b_units() {
         .open_video(VideoConfig {
             width: Some(640),
             height: Some(360),
-            codec: rust_airplay::VideoCodec::H264,
+            codec: VideoCodec::H264,
         })
         .expect("a video pipeline");
     // A parameter set behind a start code: not a picture, but the parser sees a unit in
@@ -130,24 +137,25 @@ fn the_video_pipeline_accepts_annex_b_units() {
     // A frame that is not a picture leaves a decoder waiting for one, so the stream is
     // flushed rather than closed.
     let _ = stream.flush();
+    let _ = stream.close();
 }
 
 #[test]
 #[ignore = "needs a GStreamer runtime; see README.md"]
-fn a_sink_that_does_not_exist_is_reported_when_the_stream_is_opened() {
+fn a_sink_that_does_not_exist_is_reported_when_the_renderer_is_built() {
     // The failure a user is most likely to hit is a sink their machine does not have, and
-    // it has to arrive when a stream is opened rather than as silence.
-    let Ok(renderer) = GstRenderer::with_sinks("no-such-sink-name", "fakesink") else {
-        eprintln!("skipping: no gst-launch-1.0");
-        return;
-    };
-    let error = renderer
-        .open_audio(AudioConfig::default())
-        .expect_err("a sink that does not exist");
+    // it has to arrive when the renderer is built -- at startup, where a program can
+    // still choose another backend -- rather than as silence in a session.
+    let error = GstRenderer::with_sinks("no-such-sink-name", "fakesink")
+        .expect_err("a sink that does not exist is not a renderer");
     let text = error.to_string();
     assert!(
-        text.contains("no-such-sink-name") || text.contains("no element"),
+        text.contains("no-such-sink-name"),
         "the reason names what was missing: {text}"
+    );
+    assert!(
+        matches!(error, rust_airplay::RenderError::Unavailable(_)),
+        "a missing element is the machine, not the request: {error:?}"
     );
 }
 

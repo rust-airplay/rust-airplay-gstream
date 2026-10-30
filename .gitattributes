@@ -1,0 +1,9 @@
+# Line endings and binary media.
+#
+# Git for Windows defaults to core.autocrlf=true, which would check a shell script
+# out with CRLF line endings and a shebang that no longer runs, and would rewrite
+# the fixture media if it ever decided they were text.
+* text=auto eol=lf
+*.sh text eol=lf
+*.h264 binary
+*.eld binary

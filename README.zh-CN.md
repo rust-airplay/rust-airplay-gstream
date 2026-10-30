@@ -8,16 +8,20 @@
 
 [`docs/ARCHITECTURE.zh-CN.md`](docs/ARCHITECTURE.zh-CN.md) 解释了两种媒体为何采用不同形态、一帧数据会经历什么，以及冲刷在这里能做到什么、做不到什么。
 
+[CHANGELOG.md](CHANGELOG.md) 记录了 0.3 改了什么，[MIGRATION.zh-CN.md](MIGRATION.zh-CN.md) 把基于 0.2 的构建映射到它上面。
+
 ## 依赖
 
 **构建**需要 GStreamer 开发文件，通过 `pkg-config` 找到：`gstreamer-1.0` 与 `gstreamer-app-1.0`。
 
-**运行**需要 GStreamer 运行时与插件，视频路径还需要 `PATH` 上的 `gst-launch-1.0`：
+**运行**需要 GStreamer 运行时与插件：
 
 | 用途 | 元素或程序 |
 | --- | --- |
-| 视频 | `gst-launch-1.0`、`h264parse` 或 `h265parse`、`avdec_h264` 或 `avdec_h265`（或 Direct3D11 那一对）、`videoconvert`、一个 sink |
+| 视频 | `gst-launch-1.0`、`h264parse` 或 `h265parse`、`avdec_h264` 或 `avdec_h265`、一个 sink |
 | 音频 | `avdec_aac` 或 `avdec_alac`、`audioconvert`、`audioresample`、一个 sink |
+
+`avdec_*` 解码器来自 `gst-libav`。只播音频的机器不需要 `gst-launch-1.0`：渲染器照常构建、音频照常播放，只有视频请求会报告不可用。
 
 Windows 上 MSYS2 UCRT64 两者都有，把 `C:\msys64\ucrt64\bin` 放进 `PATH`。Debian 与 Ubuntu 上，`libgstreamer1.0-dev` 与 `libgstreamer-plugins-base1.0-dev` 用于构建，上面这些元素所在的插件包用于运行。
 
@@ -25,8 +29,8 @@ Windows 上 MSYS2 UCRT64 两者都有，把 `C:\msys64\ucrt64\bin` 放进 `PATH`
 
 ```toml
 [dependencies]
-rust-airplay = "0.2"
-rust-airplay-gstream = "0.2"
+rust-airplay = "0.3"
+rust-airplay-gstream = "0.3"
 ```
 
 ```rust,no_run
@@ -43,50 +47,69 @@ rust_airplay::run(config).await?;
 # }
 ```
 
-两个 crate 都已发布到 crates.io。`rust-airplay-gstream` 依赖核心的 0.2 系列，`Cargo.lock` 会把两者解析到同一组版本。
+两个 crate 都已发布到 crates.io。`rust-airplay-gstream` 跟随核心的 0.3 系列，`Cargo.lock` 会把两者解析到同一组版本。
 
 ## Options
 
-调用方能选的一切都是 `Options` 的字段：
+调用方能选的一切都在 `Options` 里，且每个默认值都与对应环境变量产生的值一致，所以 `Options::default` 的行为与 `GstRenderer::new` 完全相同：
 
-| 字段 | 含义 | 默认值 |
+| 方法 | 含义 | 默认值 |
 | --- | --- | --- |
-| `audio_sink` | GStreamer 音频 sink | 依次找 `wasapisink`、`autoaudiosink`、`osssink`、`alsasink`、`pulsesink`、`fakesink` 中第一个存在的 |
-| `video_sink` | GStreamer 视频 sink | 依次找 `d3d11videosink`、`autovideosink`、`glimagesink`、`fakesink` 中第一个存在的 |
-| `video_parser` | 镜像管线使用的 parser | `h264parse`，HEVC 时为 `h265parse` |
-| `video_decoder` | 解码器及其所需转换器 | 随 sink 一起选择 |
-| `warm_video` | 视频管线随接收端一起启动 | 关闭 |
+| `Options::new(audio, video)` | 直接给出两个 sink | -- |
+| `.with_audio_sink(sink)` | GStreamer 音频 sink | 依次找 `wasapisink`、`autoaudiosink`、`osssink`、`alsasink`、`pulsesink`、`fakesink` 中第一个存在的 |
+| `.with_video_sink(sink)` | GStreamer 视频 sink | 依次找 `d3d11videosink`、`autovideosink`、`glimagesink`、`fakesink` 中第一个存在的 |
+| `.with_video_chain(codec, parser, decoder)` | H.264 或 H.265 的 parser 与解码器 | `h264parse` + `avdec_h264`，`h265parse` + `avdec_h265` |
+| `.with_warm_video(bool)` | 在会话之间保留视频管线 | 关闭 |
 
-每个默认值都与对应环境变量所产生的值一致，所以 `Options::default()` 的行为与 `GstRenderer::new` 完全相同。`Options::with_video_sink` 同时替换 sink 与解码链，因为 `d3d11h264dec` 解出的内存只有 `d3d11videosink` 能接收；只换其中一个，硬件 sink 就会被软件解码器喂数据。
+一个 sink 是一个元素，外加可选的属性——`fakesink`，或 `filesink location=out.raw`。它在构建渲染器时就被检查：元素必须存在，且这个片段必须是单个元素而不是一条管线，所以 sink 无法把 `!` 分隔的元素或另一个 sink 拉进本后端构建的管线。
+
+```rust
+use rust_airplay::{Renderer, VideoCodec};
+use rust_airplay_gstream::{GstRenderer, Options};
+
+let renderer = GstRenderer::with_options(
+    Options::new("fakesink", "filesink location=out.raw")
+        .with_video_chain(VideoCodec::H265, "h265parse", "avdec_h265")
+        .with_warm_video(true),
+)?;
+# Ok::<(), rust_airplay::RenderError>(())
+```
 
 ## 环境变量
 
 | 变量 | 作用 |
 | --- | --- |
 | `AIRPLAY_GST_LAUNCH` | 要运行的 `gst-launch-1.0` 可执行文件 |
-| `AIRPLAY_GST_AUDIO_SINK` | 音频 sink |
-| `AIRPLAY_GST_VIDEO_SINK` | 视频 sink |
-| `AIRPLAY_GST_VIDEO_WARM` | 设为 `1` 时视频管线随接收端启动 |
-| `AIRPLAY_GST_KEEP_STDERR` | 保留子进程的错误输出而不是删除，并打印其路径 |
+| `AIRPLAY_GST_AUDIO_SINK` | 音频 sink，按片段写法 |
+| `AIRPLAY_GST_VIDEO_SINK` | 视频 sink，按片段写法 |
+| `AIRPLAY_GST_VIDEO_WARM` | 设为 `1`（或除 `0`/`false`/`no`/`off` 之外的值）时在会话之间保留视频管线 |
+| `AIRPLAY_GST_KEEP_STDERR` | 保留子进程的输出而不是删除，并记录其路径 |
+
+`Options` 在构造时读取这些变量，所以想在代码里选择的程序应使用 `Options::new` 与各个 `with_*` 方法。
 
 ## 一条流会经历什么
 
-- **视频**按推入顺序写进管线。子进程拿到的是字节流，所以时间戳不会进入其中；节流发生在本侧，由核心要求时执行。
-- **音频**保留时间戳：每帧是一个 `appsrc` 缓冲区，其呈现时间来自客户端的采样计数，sink 按采集速率播放。
+- **视频**按推入顺序写进子进程。字节流不携带时间戳，所以节流发生在本侧，由 `VideoStream::set_pace` 执行。
+- **音频**保留时序：每帧是一个 `appsrc` 缓冲区，其呈现时间是距会话首帧的采样偏移，按会话采样率换算。
 - **音量**是 sink 之前 `volume` 元素上的线性增益，应用到正在播放的流，并为下一条流记住。
+- **flush** 丢弃已排队的内容：音频先回 `READY` 再重新启动；视频直接替换解码进程，这是让解码器忘掉队列的唯一办法。冲刷之后客户端发来的关键帧，才让新解码器正确而不只是空白。
+
+## 失败
+
+`RenderError::Unavailable` 表示这台机器做不到：没有 `gst-launch-1.0`、sink 或解码元素未安装、没有 GStreamer 运行时。`RenderError::Failed` 表示请求没能完成：程序拒绝了描述、管线中途停止。接收端把两种都报出来并继续服务；一个在内部自动重试的后端只是在掩盖自己的失败。
 
 ## 测试
 
 ```sh
-cargo test
-cargo test -- --ignored
+cargo test                          # 单元测试，不需要 GStreamer
+cargo test -- --ignored             # 需要 GStreamer 运行时与 gst-launch-1.0
 ```
 
-被忽略的测试需要 GStreamer 运行时与 `gst-launch-1.0`。它们用真实会话里抓下来的帧做解码，这正是它们的价值所在：一条管线可以接受每个缓冲区却一个都不解码，只有解码输出能回答这个问题。
+集成测试解码 fixture 并数帧：一条管线可以接受每个缓冲区却一个都不解码，只有解码输出能回答这个问题。视频 fixture 是合成的——`videotestsrc` 经 `openh264enc`，640x360，48 张图——因此不含任何截屏内容，[tools/make-fixtures.sh](tools/make-fixtures.sh) 能逐字节重新生成它。音频 fixture 是真实会话里的 40 个裸 AAC-ELD 载荷，之所以保留，是因为没有能合成它们的 AAC-ELD 编码器。[`tests/fixtures/README.md`](tests/fixtures/README.md) 记录了每个文件的来历与复现方式。
 
 ## 发布
 
-`Publish to crates.io` 是手动工作流，需要仓库 secret `CARGO_REGISTRY_TOKEN`，从 `main` 运行，并支持 `dry_run`。请先发布它依赖的核心版本：打包本 crate 时 Cargo 会从 crates.io 解析 `rust-airplay = "0.2"`。
+发布是一个由 `vX.Y.Z` 标签驱动的工作流，标签版本必须与 `Cargo.toml` 一致。它会拒绝脏工作树、跑完整套测试（包括被忽略的那些）、检查打包出的 `.crate` 里含有 fixtures，并在真正上传前先 dry-run 一次，最后用仓库 secret `CARGO_REGISTRY_TOKEN` 发布。请先发布它依赖的核心版本：打包本 crate 时 Cargo 会从 crates.io 解析 `rust-airplay = "0.3"`。
 
 ## 许可证
 

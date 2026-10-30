@@ -1,0 +1,80 @@
+# cargo-deny policy for rust-airplay-gstream.
+#
+# Three questions are answered here: are there known vulnerabilities in the resolved
+# dependency tree, are all of those crates licensed in a way this GPL-3.0-or-later crate
+# can ship, and did every crate come from crates.io rather than from a git branch or a
+# private registry. Run locally with `cargo deny check`; CI runs it on every push.
+#
+# The syntax below is the one cargo-deny 0.16 and newer accept: no `version =` key, the
+# advisory ignores are `{ id = "...", reason = "..." }` tables so the reason travels with
+# the exception instead of living in a commit message.
+
+[graph]
+# The tree CI resolves for the host is the tree that ships, so that is what gets checked.
+# `--all-features` is passed on the command line by the workflow.
+all-features = false
+no-default-features = false
+
+[output]
+feature-depth = 1
+
+[advisories]
+# Deny everything the RustSec database reports. Three findings are known, and all three are
+# one trade-off: the fixes exist, but every fixed release requires Rust 1.88 while this
+# crate promises 1.85 in `rust-version`.
+#
+# The chain is rust-airplay-gstream -> rust-airplay 0.3 -> plist 1.8.0 -> quick-xml 0.38.4,
+# plus time 0.3.45. plist 1.8.0 is the newest plist that compiles on 1.85 (plist 1.9 and
+# later require 1.88); it accepts quick-xml ^0.38, so the resolved quick-xml is 0.38.4, the
+# newest of that line. time 0.3.45 is the newest time below 1.88: 0.3.46 and every later
+# release declare rust-version 1.88.
+#
+# So these cannot be fixed without raising the MSRV, and they are ignored by advisory id
+# with the reason recorded here rather than in a commit message. When `rust-version` moves
+# to 1.88 or beyond, delete these three entries and update the lockfile: plist 1.10.x pulls
+# quick-xml 0.42 and time 0.3.47+, which clears all three. Everything else stays a hard deny.
+ignore = [
+    { id = "RUSTSEC-2026-0194", reason = "quick-xml 0.38.4 is the newest release plist 1.8.0 accepts; plist 1.9+ requires Rust 1.88 and would break the 1.85 MSRV. Drop when rust-version is raised." },
+    { id = "RUSTSEC-2026-0195", reason = "same quick-xml 0.38.4 through plist 1.8.0; every newer plist requires Rust 1.88. Drop when rust-version is raised." },
+    { id = "RUSTSEC-2026-0009", reason = "time 0.3.45 is the newest time that compiles on Rust 1.85 (0.3.46+ require 1.88); the fix lands in 0.3.47. Drop when rust-version is raised." },
+]
+
+[licenses]
+# The published crate is GPL-3.0-or-later, which is compatible with every license listed
+# here. Nothing weaker than these entries is accepted; a new dependency under an
+# unfamiliar license fails the check until it is added deliberately.
+allow = [
+    "GPL-3.0-or-later",
+    "MIT",
+    "Apache-2.0",
+    # target-lexicon (via the gstreamer -sys crates) ships this exact expression.
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Zlib",
+    "MPL-2.0",
+    "Unicode-3.0",
+    "CC0-1.0",
+    "Unlicense",
+]
+confidence-threshold = 0.8
+
+[licenses.private]
+# rust-airplay-gstream is published, so workspace crates are checked like any other.
+ignore = false
+
+[bans]
+# Duplicate versions are not an error by themselves, but each one is a crate the audit
+# covers twice, so the report is a warning the reviewer sees on every run.
+multiple-versions = "warn"
+wildcards = "allow"
+highlight = "all"
+
+[sources]
+# crates.io only: a dependency that quietly starts coming from a git branch or a second
+# registry would not be covered by the advisory or license checks above.
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []

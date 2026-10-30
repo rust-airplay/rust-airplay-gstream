@@ -1,64 +1,131 @@
-name: Publish to crates.io
+name: Release
 
-# Run this from the Actions tab after the core release it depends on is on crates.io.
-# The token comes from the `CARGO_REGISTRY_TOKEN` repository secret; nothing is stored in
-# the repository.
+# Cutting a release is three promises at once: the tag names the version the crate
+# carries, the tree the tag points at is the tree that was tested, and that tree still
+# passes everything CI would run on it. Each step below exists to break the release loudly
+# when one of those promises is false, before anything reaches crates.io.
 on:
-  workflow_dispatch:
-    inputs:
-      dry_run:
-        description: Package and verify without uploading
-        required: false
-        type: boolean
-        default: false
+  push:
+    tags:
+      - "v*.*.*"
 
 permissions:
   contents: read
 
 concurrency:
-  group: release-crates-io
+  group: release-${{ github.ref }}
   cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+  AIRPLAY_GST_VIDEO_SINK: fakesink
+  AIRPLAY_GST_AUDIO_SINK: fakesink
 
 jobs:
   publish:
-    name: Publish rust-airplay-gstream
-    runs-on: ubuntu-latest
-    timeout-minutes: 45
+    name: publish to crates.io
+    runs-on: ubuntu-22.04
+    timeout-minutes: 60
     steps:
+      # Full history and tags: the two gates below compare the pushed tag against the
+      # commit it points at, and `git status --porcelain` has to be able to see everything.
       - name: Check out the repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
-      - name: Install GStreamer
+      # The ignored integration tests run here too, so this is the same full GStreamer
+      # runtime the CI `test-linux` job installs.
+      - name: Install GStreamer with its decoders
         run: |
           sudo apt-get update
-          sudo apt-get install -y libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev
+          sudo apt-get install -y \
+            libgstreamer1.0-dev \
+            libgstreamer-plugins-base1.0-dev \
+            gstreamer1.0-plugins-base \
+            gstreamer1.0-plugins-good \
+            gstreamer1.0-plugins-bad \
+            gstreamer1.0-plugins-ugly \
+            gstreamer1.0-libav \
+            gstreamer1.0-tools
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt, clippy
 
       - name: Cache the build
         uses: Swatinem/rust-cache@v2
 
-      - name: Refuse to publish from outside main
-        if: ${{ !inputs.dry_run && github.ref != 'refs/heads/main' }}
+      # The tag is the release identity; the version inside Cargo.toml is the identity
+      # crates.io records. A mismatch publishes one version under another version name.
+      - name: Check the tag against the crate version
         run: |
-          echo "A real publish has to run from main; this run is on ${{ github.ref }}." >&2
-          exit 1
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME}"
+          if [[ ! "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::$tag is not a vX.Y.Z release tag"
+            exit 1
+          fi
+          version="$(cargo metadata --no-deps --format-version 1 | python3 -c "import json, sys; print(next(p['version'] for p in json.load(sys.stdin)['packages'] if p['name'] == 'rust-airplay-gstream'))")"
+          if [[ "${tag#v}" != "$version" ]]; then
+            echo "::error::tag $tag does not match the Cargo.toml version $version"
+            exit 1
+          fi
+          echo "tag $tag matches Cargo.toml version $version"
 
-      - name: Run the tests
-        run: cargo test
+      # A release must be reproducible from the pushed commit. Anything uncommitted here
+      # would be published but not tagged, and would not exist for anyone else.
+      - name: Check the working tree is clean
+        run: |
+          set -euo pipefail
+          if [[ -n "$(git status --porcelain)" ]]; then
+            echo "::error::the working tree is dirty; tag a clean commit instead"
+            git status --porcelain
+            exit 1
+          fi
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
 
       - name: Run clippy
         run: cargo clippy --all-targets -- -D warnings
 
-      - name: Publish
+      - name: Build the documentation
+        env:
+          RUSTDOCFLAGS: -D warnings
+        run: cargo doc --no-deps
+
+      - name: Run the doctests
+        run: cargo test --doc
+
+      - name: Run the tests
+        run: cargo test --all-targets
+
+      - name: Run the ignored tests against the real runtime
+        run: cargo test --all-targets -- --ignored --test-threads=1
+
+      # The integration tests read tests/fixtures/** through include_bytes!, so a crate
+      # packaged without them cannot be tested by whoever downloads it. The dry run below
+      # verifies the packaged tests compile; this step verifies the data is in the tarball.
+      - name: Require the fixtures to be in the package
+        run: |
+          set -euo pipefail
+          cargo package --list > "$RUNNER_TEMP/package-list.txt"
+          for fixture in tests/fixtures/mirror-first-audio.eld tests/fixtures/mirror-first-frames.h264; do
+            if ! grep -qx "$fixture" "$RUNNER_TEMP/package-list.txt"; then
+              echo "::error::$fixture is missing from the packaged crate"
+              exit 1
+            fi
+          done
+
+      # Packs, verifies and compiles the crate exactly as the upload would, without
+      # uploading: the last chance to find out that the published tarball does not build.
+      - name: Dry-run the publish
+        run: cargo publish --dry-run
+
+      # The token is the repository secret the project already publishes with, and cargo
+      # reads it as CARGO_REGISTRY_TOKEN. Nothing else in this workflow has a credential.
+      - name: Publish to crates.io
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
-        run: |
-          if [ "${{ inputs.dry_run }}" = "true" ]; then
-            cargo publish --dry-run --registry crates-io
-          else
-            cargo publish --registry crates-io
-          fi
+        run: cargo publish

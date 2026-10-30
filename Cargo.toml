@@ -9,14 +9,19 @@ include = [
     "/src/**/*.rs",
     "/docs/**/*.md",
     "/tests/**/*.rs",
+    "/tests/fixtures/**",
+    "/tools/make-fixtures.sh",
     "/Cargo.toml",
     "/README.md",
     "/README.zh-CN.md",
+    "/CHANGELOG.md",
+    "/MIGRATION.md",
+    "/MIGRATION.zh-CN.md",
     "/LICENSE",
 ]
 keywords = ["airplay", "gstreamer", "renderer", "video", "audio"]
 categories = ["multimedia"]
-version = "0.2.0"
+version = "0.3.0"
 edition = "2024"
 rust-version = "1.85"
 license = "GPL-3.0-or-later"
@@ -35,13 +40,13 @@ all = "warn"
 
 [dependencies]
 # The core library: protocol, decryption and framing. This crate decodes and presents.
-# Published on crates.io; this crate follows the core's 0.2 line.
-rust-airplay = "0.2"
-# Linked rather than run as a subprocess for audio: audio needs `appsrc`, one buffer per
-# frame, because a `gst-launch` pipeline fed bytes on stdin cannot express where a frame
-# ends (see `src/audio.rs`).
+# Published on crates.io; this crate follows the core 0.3 line, whose render boundary
+# adds VideoStream pause/resume and renames Volume fraction to Volume level.
+rust-airplay = "0.3"
+# Linked rather than run as a subprocess for audio: audio needs appsrc, one buffer per
+# frame, because a gst-launch pipeline fed bytes on stdin cannot express where a frame
+# ends (see src/audio/).
 gstreamer = "0.24"
 # Records, not printing: the program embedding this backend decides what a user sees.
 log = "0.4"
 gstreamer-app = "0.24"
-

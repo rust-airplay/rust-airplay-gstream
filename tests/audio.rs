@@ -70,7 +70,7 @@ fn a_raw_aac_eld_stream_is_decoded() {
         .expect("an audio stream opens");
 
     for (index, payload) in captured.iter().enumerate() {
-        let timestamp = index as u64 * SAMPLES_PER_FRAME * 1_000_000_000 / 44_100;
+        let timestamp = index as u64 * SAMPLES_PER_FRAME;
         if let Err(error) = stream.push(AudioFrame {
             data: payload.to_vec(),
             timestamp,
@@ -85,9 +85,9 @@ fn a_raw_aac_eld_stream_is_decoded() {
     }
 
     // The decoder works through what it was given, and only then is there anything to
-    // read. Ending the stream is what flushes the rest of it.
+    // read. Ending the stream is what flushes the rest of it, and waiting for that is
+    // what close does: when it returns, the last frame has been decoded and written.
     stream.close().expect("the stream ends");
-    std::thread::sleep(std::time::Duration::from_millis(500));
     drop(stream);
 
     let decoded = std::fs::metadata(&path).map(|meta| meta.len()).unwrap_or(0);
