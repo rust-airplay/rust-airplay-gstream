@@ -2,9 +2,10 @@
 //! What video pacing does with a real clock.
 //!
 //! The arithmetic is unit-tested against a clock that does not sleep (see
-//! `src/pacing.rs`); this is the part a unit test cannot see: that the stream the renderer
-//! opens actually waits on a cumulative timeline, and that turning pacing off turns the
-//! waiting off.
+//! `src/pacing.rs`); this is the part a unit test cannot see: that a stream borrowed from a
+//! real renderer waits on a cumulative timeline, and that turning pacing off turns the waiting
+//! off. The test calls `set_pace` directly on purpose: the receiver stopped calling it in core
+//! 0.3.1, so the hook's behaviour is only observable through a caller that drives it.
 
 use std::time::{Duration, Instant};
 

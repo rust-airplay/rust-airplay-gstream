@@ -58,7 +58,9 @@ rust_airplay::run(config).await?;
 ```
 
 Both crates are on crates.io. `rust-airplay-gstream` follows the core's 0.3 line, so a
-`Cargo.lock` resolves the pair together.
+`Cargo.lock` resolves the pair together. Its floor is `rust-airplay` 0.3.1: 0.3.0's receiver
+delegated pacing to the backend and trimmed its mirror queue one frame at a time, and 0.3.1
+is the release that fixed both.
 
 ## Options
 
@@ -108,12 +110,14 @@ uses `Options::new` and the `with_*` methods instead.
 ## What it does with the stream
 
 - **Video** is written to the subprocess in the order it was pushed. A byte stream carries no
-  timestamps, so pacing happens here, in `VideoStream::set_pace`: the wait is scheduled against
-  a cumulative deadline, so a sleep that returns late does not push every later frame back with
-  it, and a spacing of zero means "do not wait" rather than "sleep for zero". A stream that
-  falls more than one interval behind is re-anchored at the current time instead of repaying
-  the gap as a burst. A sink that schedules on its own clock can turn this off with
-  `Options::without_pacing()`.
+  timestamps, and with `rust-airplay` 0.3.1 and later the receiver does the pacing itself (or
+  pushes at full speed and lets the pipe push back); it does not call `VideoStream::set_pace`.
+  That hook remains for a caller driving the trait directly, and this backend honours the
+  contract the trait documents: the wait is scheduled against a cumulative deadline, so a sleep
+  that returns late does not push every later frame back with it; a spacing of zero means "do
+  not wait" rather than "sleep for zero"; a stream that falls more than one interval behind is
+  re-anchored instead of repaying the gap as a burst; and `Options::without_pacing()` turns the
+  wait off for a sink that schedules on its own clock.
 - **Audio** keeps its timing: each frame is an `appsrc` buffer whose presentation time is its
   sample offset from the first frame of the session, at the session's sample rate.
 - **Volume** is a linear gain on a `volume` element in front of the sink, applied to the stream

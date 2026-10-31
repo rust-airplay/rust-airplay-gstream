@@ -6,12 +6,13 @@
 //! -- a decoder that segfaults on one malformed frame takes only its own process with
 //! it. Audio has no such boundary and is linked instead.
 //!
-//! Nothing here knows about the client's clock. Frames arrive as fast as they can be
-//! produced, and when the receiver does not pace itself the backend does it in
-//! [GstVideo::set_pace], because a decoder that runs ahead of a mirror stream loses the
-//! frames later ones refer to. That pacing is a cumulative timeline (see `crate::pacing`),
-//! not a per-frame sleep, and [crate::Options::without_pacing] turns it off for a caller
-//! whose sink does its own scheduling.
+//! Nothing here knows about the client's clock. The receiver either paces a mirror itself
+//! or pushes at full speed and lets the backend's backpressure decide the rate (core 0.3.1
+//! and later); it does not call [GstVideo::set_pace]. The hook stays for a caller that drives
+//! the trait directly, and this implementation honours the contract the trait documents: a
+//! cumulative timeline (see `crate::pacing`), not a per-frame sleep. A spacing of zero means
+//! no wait, and [crate::Options::without_pacing] turns the wait off for a sink that schedules
+//! on its own clock.
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -158,6 +159,10 @@ impl VideoStream for GstVideo {
     /// Waits until this frame's place on the stream's timeline.
     ///
     /// # Contract
+    ///
+    /// The receiver does not call this: with core 0.3.1 and later it paces a mirror itself,
+    /// or pushes at full speed and lets the pipe push back. A caller that drives the trait
+    /// directly gets the wait the trait documents.
     ///
     /// The interval is the spacing the stream has been arriving at, not a request to sleep
     /// that long per frame: the wait is scheduled against a cumulative deadline, so sleep

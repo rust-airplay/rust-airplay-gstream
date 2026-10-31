@@ -6,6 +6,12 @@ All notable changes to this crate are recorded here. The format follows
 
 ## [Unreleased]
 
+The next release is 0.3.1 and its floor is `rust-airplay = "0.3.1"`: core 0.3.1 stopped
+delegating its pacing to `VideoStream::set_pace` and now restarts a mirror group on a key
+frame after an overflow, which is the pairing this backend's pacer and its queue were written
+for. The trait's cumulative-deadline wording arrived in the same release, and this backend
+already satisfied it.
+
 ### Fixed
 
 - **Video pacing drifted.** `set_pace` slept for the interval on every frame, so a sleep that
@@ -20,9 +26,13 @@ All notable changes to this crate are recorded here. The format follows
 - **Pacing is explicit and can be turned off.** `set_pace(0.0)` means "do not wait", not
   "sleep for zero", and `Options::without_pacing()` (or `with_pacing(false)`) tells this
   backend to ignore the spacing for a sink that schedules on its own clock.
-- **`MAX_PACE_SECONDS` is documented as a guard, not a policy.** The receiver's own lead is
-  tens of milliseconds; the clamp only keeps a stale spacing from holding a frame for a
-  second.
+- **`MAX_PACE_SECONDS` is documented as a guard, not a policy.** The receiver paces a mirror
+  itself with a lead of tens of milliseconds (core 0.3.1); the clamp only keeps a stale
+  spacing from holding a frame for a second.
+- **The core dependency floor is 0.3.1, and the docs say so.** The receiver no longer calls
+  `set_pace`, so the method is documented as a hook for a caller driving the trait directly,
+  with the contract core 0.3.1 writes down. `Cargo.toml` asks for `"0.3.1"` so a build cannot
+  pair this backend with the receiver that delegated pacing and trimmed frames individually.
 - **The frame source asks the pipe for more at a time.** `fdsrc`'s block size is raised to
   256 KiB, which measured about 5% on 4800 synthetic pictures (501 ms to 476 ms); the same
   stream read from a file took 423 ms, so the remaining difference is the process boundary,

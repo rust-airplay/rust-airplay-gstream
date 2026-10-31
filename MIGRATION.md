@@ -47,9 +47,13 @@ caller sees is the same signature with a sharper contract:
 - `MAX_PACE_SECONDS` (one second) is a guard against a stale spacing, not a policy: the
   receiver's own lead is tens of milliseconds.
 
-This pairs with the core's `Config::pace_video`: when the receiver paces itself it does not call
-`set_pace`, and when it does call it the wait belongs here. A renderer that paces and a receiver
-that paces are two waits, not one.
+With core 0.3.1 and later the receiver does not call `set_pace` at all: with `pace_video` on
+it holds each frame back itself, and with it off it pushes at full speed and lets the pipe's
+backpressure decide the rate. The hook remains for a caller that drives the trait directly,
+and the cumulative-deadline wording above is now the contract the trait itself documents.
+Supporting that is why this crate's floor is `rust-airplay = "0.3.1"` rather than `"0.3"`:
+0.3.0's receiver delegated its pacing here, and it trimmed a mirror queue one frame at a time
+instead of waiting for a key frame.
 
 ## `Options`
 

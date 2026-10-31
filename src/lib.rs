@@ -30,8 +30,10 @@
 //!
 //! Neither medium is scheduled against the client's clock: an AirPlay timestamp is an
 //! RTP counter whose origin means nothing here, and a display's clock is not the
-//! sender's. Audio is timed from its own first frame, and video is paced by the caller
-//! when it asks for it ([Options] and [Chain]).
+//! sender's. Audio is timed from its own first frame. Video is paced by the receiver
+//! itself (core 0.3.1 and later) or pushed at full speed; [rust_airplay::VideoStream::set_pace] stays
+//! for a caller that drives the trait directly, and the wait it applies is a cumulative
+//! deadline rather than a sleep per frame.
 //!
 //! # Flushing
 //!

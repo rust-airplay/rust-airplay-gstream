@@ -78,11 +78,14 @@ a faster pipe.
 
 - **Video** is written to the pipeline in the order it was pushed. Timestamps are not carried
   into the pipeline: the subprocess is fed a byte stream, and a byte stream has no timestamps.
-  Pacing therefore happens on this side, and it is a cumulative timeline rather than a sleep
-  per frame: the first spacing anchors a grid, each later frame waits for its place on it, and
-  a sleep that returns late does not push every later frame back with it. A frame more than
-  one interval behind is a stall, and the grid re-anchors at the current time instead of the
-  backend emitting a burst to catch up. `set_pace(0.0)` means "do not wait", and
+  With core 0.3.1 and later the receiver paces a mirror itself, or pushes at full speed and
+  lets the pipe's backpressure decide the rate; it does not call `set_pace`. That hook stays
+  for a caller driving the trait directly, and when it is used this backend keeps a cumulative
+  timeline rather than sleeping per frame: the first spacing anchors a grid, each later frame
+  waits for its place on it, and a sleep that returns late does not push every later frame
+  back with it. A frame more than one interval behind is a stall, and the grid re-anchors at
+  the current time instead of the backend emitting a burst to catch up. `set_pace(0.0)` means
+  "do not wait", and
   `Options::without_pacing()` turns the waiting off for a sink that schedules on its own
   clock. `MAX_PACE_SECONDS` is only a guard against a stale spacing; the receiver's own lead
   is tens of milliseconds, so the clamp is never the thing in charge.

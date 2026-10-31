@@ -38,10 +38,11 @@ pub const WARM_VIDEO_ENV: &str = "AIRPLAY_GST_VIDEO_WARM";
 
 /// The largest spacing this backend will pace a video stream at.
 ///
-/// A guard, not a policy: the receiver's own lead is tens of milliseconds, and a spacing
-/// above this is a client that stopped rather than a slow one, so clamping keeps a stale
-/// value from holding a frame back for a second. A value past the guard is not an error;
-/// pacing is a hint, and the next frame arrives when it arrives.
+/// A guard, not a policy: the receiver paces a mirror itself with a lead of tens of
+/// milliseconds (core 0.3.1 and later), and a spacing above this is a caller that stopped
+/// rather than a slow one, so clamping keeps a stale value from holding a frame back for a
+/// second. A value past the guard is not an error; pacing is a hint, and the next frame
+/// arrives when it arrives.
 pub const MAX_PACE_SECONDS: f64 = 1.0;
 
 /// The largest video frame this backend accepts.
