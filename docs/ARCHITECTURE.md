@@ -67,13 +67,25 @@ reading becomes a refused frame rather than a session that never returns. Every 
 process has a deadline as well: a closed pipeline gets time to play out, a killed one gets
 time to be reaped, and past either it is killed rather than waited for.
 
+The pipe has a throughput ceiling that the process boundary sets: measured on 4800 synthetic
+pictures, the same pipeline decodes in 476 ms when it reads standard input (with `fdsrc`'s
+block size raised to 256 KiB) and 423 ms when it reads the same stream from a file. That is
+comfortably above what a mirror sends, and it is the reason an in-process `appsrc` -- which
+the audio path already uses -- is the mid-term shape for a 4K or 120-frame stream rather than
+a faster pipe.
+
 ## What a frame does
 
 - **Video** is written to the pipeline in the order it was pushed. Timestamps are not carried
   into the pipeline: the subprocess is fed a byte stream, and a byte stream has no timestamps.
-  Pacing therefore happens on this side. `VideoStream::set_pace` sleeps between frames, and
-  the core only calls it when `Config::pace_video` is off, because otherwise the core does
-  the waiting.
+  Pacing therefore happens on this side, and it is a cumulative timeline rather than a sleep
+  per frame: the first spacing anchors a grid, each later frame waits for its place on it, and
+  a sleep that returns late does not push every later frame back with it. A frame more than
+  one interval behind is a stall, and the grid re-anchors at the current time instead of the
+  backend emitting a burst to catch up. `set_pace(0.0)` means "do not wait", and
+  `Options::without_pacing()` turns the waiting off for a sink that schedules on its own
+  clock. `MAX_PACE_SECONDS` is only a guard against a stale spacing; the receiver's own lead
+  is tens of milliseconds, so the clamp is never the thing in charge.
 - **Audio** keeps its timestamps: each frame becomes an `appsrc` buffer whose presentation
   time is the sample offset from the session's first frame, at the session's sample rate. The
   offset is kept in the client's own 32 bits and subtracted with wrapping, because an audio

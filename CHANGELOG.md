@@ -4,6 +4,30 @@ All notable changes to this crate are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the version numbers follow
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **Video pacing drifted.** `set_pace` slept for the interval on every frame, so a sleep that
+  returned a little late pushed every later frame back with it, and the error accumulated for
+  as long as the session ran. Frames are now held to a cumulative deadline anchored at the
+  first one: jitter does not accumulate, a stall longer than one interval re-anchors the grid
+  instead of being repaid as a burst, and a flush restarts the timeline. Measured on the
+  integration test: 40 frames at 50 ms in 1.9503 s against a 1.95 s timeline, 289 us of drift.
+
+### Changed
+
+- **Pacing is explicit and can be turned off.** `set_pace(0.0)` means "do not wait", not
+  "sleep for zero", and `Options::without_pacing()` (or `with_pacing(false)`) tells this
+  backend to ignore the spacing for a sink that schedules on its own clock.
+- **`MAX_PACE_SECONDS` is documented as a guard, not a policy.** The receiver's own lead is
+  tens of milliseconds; the clamp only keeps a stale spacing from holding a frame for a
+  second.
+- **The frame source asks the pipe for more at a time.** `fdsrc`'s block size is raised to
+  256 KiB, which measured about 5% on 4800 synthetic pictures (501 ms to 476 ms); the same
+  stream read from a file took 423 ms, so the remaining difference is the process boundary,
+  and the mid-term shape for a 4K or 120-frame stream is an in-process `appsrc`.
+
 ## [0.3.0] - 2026-10-30
 
 The renderer boundary did not change shape in core 0.3, so this release is this backend

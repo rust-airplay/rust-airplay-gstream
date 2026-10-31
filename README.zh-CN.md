@@ -60,6 +60,7 @@ rust_airplay::run(config).await?;
 | `.with_video_sink(sink)` | GStreamer 视频 sink | 依次找 `d3d11videosink`、`autovideosink`、`glimagesink`、`fakesink` 中第一个存在的 |
 | `.with_video_chain(codec, parser, decoder)` | H.264 或 H.265 的 parser 与解码器 | `h264parse` + `avdec_h264`，`h265parse` + `avdec_h265` |
 | `.with_warm_video(bool)` | 在会话之间保留视频管线 | 关闭 |
+| `.with_pacing(bool)` / `.without_pacing()` | 按累计时间线给视频帧节拍 | 开启 |
 
 一个 sink 是一个元素，外加可选的属性——`fakesink`，或 `filesink location=out.raw`。它在构建渲染器时就被检查：元素必须存在，且这个片段必须是单个元素而不是一条管线，所以 sink 无法把 `!` 分隔的元素或另一个 sink 拉进本后端构建的管线。
 
@@ -89,7 +90,7 @@ let renderer = GstRenderer::with_options(
 
 ## 一条流会经历什么
 
-- **视频**按推入顺序写进子进程。字节流不携带时间戳，所以节流发生在本侧，由 `VideoStream::set_pace` 执行。
+- **视频**按推入顺序写进子进程。字节流不携带时间戳，所以节流发生在本侧，由 `VideoStream::set_pace` 执行：等待是排在一个累计截止时间上的，某次 sleep 多睡了一点，不会把后面每一帧都推后；间隔为 0 表示「不要等」而不是「睡 0 秒」。落后超过一个间隔时，时间线会在「现在」重新锚定，而不是用一次爆发去补。自己按 sink 时钟调度的场景可以用 `Options::without_pacing()` 关掉它。
 - **音频**保留时序：每帧是一个 `appsrc` 缓冲区，其呈现时间是距会话首帧的采样偏移，按会话采样率换算。
 - **音量**是 sink 之前 `volume` 元素上的线性增益，应用到正在播放的流，并为下一条流记住。
 - **flush** 丢弃已排队的内容：音频先回 `READY` 再重新启动；视频直接替换解码进程，这是让解码器忘掉队列的唯一办法。冲刷之后客户端发来的关键帧，才让新解码器正确而不只是空白。

@@ -44,6 +44,7 @@
 
 mod audio;
 mod options;
+mod pacing;
 mod pipeline;
 mod renderer;
 mod video;
@@ -84,7 +85,27 @@ pub mod testing {
         pipeline.finish().map_err(reason)
     }
 
-    /// Finds `gst-launch-1.0`, as a test that needs a program of its own looks for it.
+    /// Runs one pipeline with these arguments, feeding the stream in `chunks`.
+    ///
+    /// The production path pushes one access unit at a time, so a measurement that pushes
+    /// the whole stream in one call measures the pipe and not the path. This is the shape a
+    /// stream actually arrives in.
+    ///
+    /// # Errors
+    ///
+    /// Returns what went wrong as text.
+    pub fn feed_chunks(program: &str, args: &[String], chunks: &[Vec<u8>]) -> Result<(), String> {
+        let pipeline = Pipeline::start(program, args).map_err(reason)?;
+        for chunk in chunks {
+            if let Err(error) = pipeline.push(chunk.clone()) {
+                pipeline.abort();
+                return Err(reason(error));
+            }
+        }
+        pipeline.finish().map_err(reason)
+    }
+
+    /// Finds #B#gst-launch-1.0#B#, as a test that needs a program of its own looks for it.
     ///
     /// # Errors
     ///

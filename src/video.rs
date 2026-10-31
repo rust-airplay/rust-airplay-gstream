@@ -9,25 +9,43 @@
 //! Nothing here knows about the client's clock. Frames arrive as fast as they can be
 //! produced, and when the receiver does not pace itself the backend does it in
 //! [GstVideo::set_pace], because a decoder that runs ahead of a mirror stream loses the
-//! frames later ones refer to.
+//! frames later ones refer to. That pacing is a cumulative timeline (see `crate::pacing`),
+//! not a per-frame sleep, and [crate::Options::without_pacing] turns it off for a caller
+//! whose sink does its own scheduling.
 
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use rust_airplay::{RenderError, VideoFrame, VideoStream};
 
 use crate::options::{Chain, MAX_PACE_SECONDS, MAX_VIDEO_FRAME_BYTES};
+use crate::pacing::Pacer;
 use crate::pipeline::{self, Pipeline};
+
+/// How much the frame source asks the pipe for at once.
+///
+/// `fdsrc`'s default block size is a few kilobytes, so a descriptor is read many times per
+/// coded frame; naming a larger block lets it hand over a frame at a time. Measured through
+/// this backend on 4800 synthetic pictures: 501 ms with the default, 476 ms with 256 KiB,
+/// and 423 ms for the same pipeline reading the same stream from a file. Those frames are
+/// small, so this measures the pipe rather than a 4K bitrate; a higher bitrate closes the
+/// gap by taking the descriptor out of the path, which is what an in-process `appsrc` would
+/// do and a subprocess cannot.
+const FDSRC_BLOCKSIZE: usize = 256 * 1024;
 
 /// The arguments one video pipeline is started with.
 ///
-/// The frame source is fdsrc: frames arrive on standard input, which is the one channel
-/// a subprocess has that needs no protocol between the two processes. sync=false because
-/// a client's clock and a display's are not the same clock, and waiting on one to schedule
+/// The frame source is `fdsrc`: frames arrive on standard input, which is the one channel a
+/// subprocess has that needs no protocol between the two processes. `sync=false` because a
+/// client's clock and a display's are not the same clock, and waiting on one to schedule
 /// the other is what makes a mirror show its frames late rather than as they arrive.
 pub(crate) fn pipeline_args(chain: &Chain, sink: &[String]) -> Vec<String> {
-    let mut args = vec!["fdsrc".to_owned(), "!".to_owned()];
+    let mut args = vec![
+        "fdsrc".to_owned(),
+        format!("blocksize={FDSRC_BLOCKSIZE}"),
+        "!".to_owned(),
+    ];
     for fragment in [chain.parser(), "!", chain.decoder(), "!"] {
         for token in fragment.split_whitespace() {
             args.push(token.to_owned());
@@ -52,6 +70,13 @@ pub(crate) struct GstVideo {
     pipeline: Arc<Pipeline>,
     /// Whether the pipeline outlives this stream.
     warm: bool,
+    /// Whether this stream does its own pacing.
+    pacing: bool,
+    /// Where this stream is on its timeline.
+    ///
+    /// A mutex because `VideoStream` takes `&self` and pacing is state; the lock is never
+    /// contended, because a stream is fed by the thread that owns it.
+    pacer: Mutex<Pacer>,
     closed: AtomicBool,
     /// How many frames were accepted, so a stream that showed nothing can be told from
     /// one that was never fed.
@@ -63,6 +88,7 @@ impl std::fmt::Debug for GstVideo {
         formatter
             .debug_struct("GstVideo")
             .field("warm", &self.warm)
+            .field("pacing", &self.pacing)
             .field("pushed", &self.pushed.load(Ordering::Relaxed))
             .field("pipeline", &self.pipeline.description())
             .finish_non_exhaustive()
@@ -77,24 +103,28 @@ impl GstVideo {
     /// Returns what [Pipeline::start] returns, mapped to the render boundary: a missing
     /// element is the machine (unavailable), a broken description is the request
     /// (failed).
-    pub(crate) fn start(program: &str, args: &[String]) -> Result<Self, RenderError> {
+    pub(crate) fn start(program: &str, args: &[String], pacing: bool) -> Result<Self, RenderError> {
         let pipeline = Pipeline::start(program, args).map_err(pipeline::as_render_error)?;
         Ok(Self {
             pipeline: Arc::new(pipeline),
             warm: false,
+            pacing,
+            pacer: Mutex::new(Pacer::default()),
             closed: AtomicBool::new(false),
             pushed: AtomicU64::new(0),
         })
     }
 
     /// Takes a pipeline the renderer keeps alive between sessions.
-    pub(crate) fn adopted(pipeline: Arc<Pipeline>) -> Self {
+    pub(crate) fn adopted(pipeline: Arc<Pipeline>, pacing: bool) -> Self {
         // Said now rather than at the first push: a renderer handing this pipeline to a
         // second session is the thing that must not happen, and it checks this first.
         pipeline.claim();
         Self {
             pipeline,
             warm: true,
+            pacing,
+            pacer: Mutex::new(Pacer::default()),
             closed: AtomicBool::new(false),
             pushed: AtomicU64::new(0),
         }
@@ -125,16 +155,27 @@ impl VideoStream for GstVideo {
         Ok(())
     }
 
+    /// Waits until this frame's place on the stream's timeline.
+    ///
+    /// # Contract
+    ///
+    /// The interval is the spacing the stream has been arriving at, not a request to sleep
+    /// that long per frame: the wait is scheduled against a cumulative deadline, so sleep
+    /// granularity and per-frame lateness do not accumulate. A stall longer than one
+    /// interval re-anchors the timeline instead of being repaid as a burst.
+    ///
+    /// A value that is zero, negative or not a number means `do not wait`: a caller that
+    /// says "no pacing" is not asking for a zero-length sleep either. So does a renderer
+    /// built with [crate::Options::without_pacing].
     fn set_pace(&self, interval_seconds: f64) -> Result<(), RenderError> {
-        // A decoder cannot be asked to wait, so the wait happens here, in the thread
-        // that is about to push the next frame. Anything that is not a duration is no
-        // wait at all rather than a panic: a client's spacing is not this backend's
-        // failure.
-        if interval_seconds.is_finite() && interval_seconds > 0.0 {
-            std::thread::sleep(Duration::from_secs_f64(
-                interval_seconds.min(MAX_PACE_SECONDS),
-            ));
+        if !self.pacing || !interval_seconds.is_finite() || interval_seconds <= 0.0 {
+            return Ok(());
         }
+        let interval = Duration::from_secs_f64(interval_seconds.min(MAX_PACE_SECONDS));
+        self.pacer
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .wait(interval);
         Ok(())
     }
 
@@ -146,6 +187,12 @@ impl VideoStream for GstVideo {
         // after a flush refer only to the key frame that follows it. Replacing the
         // process is what drops the queue and resets the decoder; a key frame follows a
         // flush, which is what makes the new decoder correct rather than merely empty.
+        // The timeline restarts with it: the frames after a flush are not owed the ones
+        // that were due before.
+        self.pacer
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .reset();
         self.pipeline.restart().map_err(pipeline::as_render_error)
     }
 
@@ -190,7 +237,7 @@ impl Drop for GstVideo {
 
 #[cfg(test)]
 mod tests {
-    use super::pipeline_args;
+    use super::{FDSRC_BLOCKSIZE, pipeline_args};
     use crate::options::Chain;
 
     #[test]
@@ -200,7 +247,9 @@ mod tests {
         let args = pipeline_args(&chain, &sink);
         assert_eq!(
             args.join(" "),
-            "fdsrc ! h264parse ! avdec_h264 ! fakesink sync=false"
+            format!(
+                "fdsrc blocksize={FDSRC_BLOCKSIZE} ! h264parse ! avdec_h264 ! fakesink sync=false"
+            )
         );
     }
 
@@ -211,7 +260,9 @@ mod tests {
         let args = pipeline_args(&chain, &sink);
         assert_eq!(
             args.join(" "),
-            "fdsrc ! h264parse ! avdec_h264 ! filesink location=out.raw sync=false"
+            format!(
+                "fdsrc blocksize={FDSRC_BLOCKSIZE} ! h264parse ! avdec_h264 ! filesink location=out.raw sync=false"
+            )
         );
     }
 
@@ -222,7 +273,9 @@ mod tests {
         let args = pipeline_args(&chain, &sink);
         assert_eq!(
             args.join(" "),
-            "fdsrc ! h264parse config-interval=-1 ! avdec_h264 ! fakesink sync=false"
+            format!(
+                "fdsrc blocksize={FDSRC_BLOCKSIZE} ! h264parse config-interval=-1 ! avdec_h264 ! fakesink sync=false"
+            )
         );
     }
 }

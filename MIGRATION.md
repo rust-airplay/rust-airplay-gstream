@@ -32,6 +32,25 @@ conversion, or the stream will play at the wrong rate.
 `Volume` has both `level` and `fraction`, so `volume.fraction()` still compiles;
 `level` is what the 0.3 documentation names, and the two read the same field.
 
+## Pacing
+
+`VideoStream::set_pace` is the backend's opportunity to hold frames back, and this backend now
+holds them to a cumulative timeline rather than sleeping for the interval each time. What a
+caller sees is the same signature with a sharper contract:
+
+- the argument is the spacing the stream has been arriving at, and the wait is due time minus
+  now -- late sleeps do not accumulate;
+- `0.0` means "do not wait", not "sleep for zero";
+- a caller that wants no in-process pacing at all builds the renderer with
+  `Options::without_pacing()` (or `with_pacing(false)`), and this backend then ignores the
+  spacing entirely;
+- `MAX_PACE_SECONDS` (one second) is a guard against a stale spacing, not a policy: the
+  receiver's own lead is tens of milliseconds.
+
+This pairs with the core's `Config::pace_video`: when the receiver paces itself it does not call
+`set_pace`, and when it does call it the wait belongs here. A renderer that paces and a receiver
+that paces are two waits, not one.
+
 ## `Options`
 
 The old type was a set of single-element setters, and one of them set a chain for every

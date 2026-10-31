@@ -36,10 +36,12 @@ pub const VIDEO_SINK_ENV: &str = "AIRPLAY_GST_VIDEO_SINK";
 /// Environment variable asking for a video pipeline kept between sessions.
 pub const WARM_VIDEO_ENV: &str = "AIRPLAY_GST_VIDEO_WARM";
 
-/// The longest gap a stream is paced at.
+/// The largest spacing this backend will pace a video stream at.
 ///
-/// A client that stalls for longer than a second is not sending a slow stream, it is
-/// sending nothing; pacing past this would hold a frame back for no reason.
+/// A guard, not a policy: the receiver's own lead is tens of milliseconds, and a spacing
+/// above this is a client that stopped rather than a slow one, so clamping keeps a stale
+/// value from holding a frame back for a second. A value past the guard is not an error;
+/// pacing is a hint, and the next frame arrives when it arrives.
 pub const MAX_PACE_SECONDS: f64 = 1.0;
 
 /// The largest video frame this backend accepts.
@@ -110,6 +112,7 @@ pub struct Options {
     h264: Chain,
     h265: Chain,
     warm_video: bool,
+    pacing: bool,
 }
 
 impl Default for Options {
@@ -120,6 +123,7 @@ impl Default for Options {
             h264: h264_chain(),
             h265: h265_chain(),
             warm_video: warming_from(named(WARM_VIDEO_ENV).as_deref()),
+            pacing: true,
         }
     }
 }
@@ -138,6 +142,7 @@ impl Options {
             h264: h264_chain(),
             h265: h265_chain(),
             warm_video: false,
+            pacing: true,
         }
     }
 
@@ -196,6 +201,25 @@ impl Options {
         self
     }
 
+    /// The same options, pacing video frames on a cumulative timeline or not.
+    ///
+    /// Pacing is on by default and is what the core asks for when it does not pace itself:
+    /// frames are held to the spacing they arrived at. Turn it off for a sink that already
+    /// schedules on its own clock, where a wait here would only add latency to a picture
+    /// the sink is about to delay again.
+    pub fn with_pacing(mut self, pacing: bool) -> Self {
+        self.pacing = pacing;
+        self
+    }
+
+    /// The same options with in-process pacing turned off.
+    ///
+    /// Shorthand for `Options::with_pacing(false)`; see there for when that is right.
+    pub fn without_pacing(mut self) -> Self {
+        self.pacing = false;
+        self
+    }
+
     /// The audio sink named, or none when the environment named none.
     pub fn audio_sink(&self) -> Option<&str> {
         self.audio_sink.as_deref()
@@ -226,6 +250,11 @@ impl Options {
     /// Whether a video pipeline is kept between sessions.
     pub fn warm_video(&self) -> bool {
         self.warm_video
+    }
+
+    /// Whether video frames are paced here.
+    pub fn pacing(&self) -> bool {
+        self.pacing
     }
 }
 
@@ -292,5 +321,27 @@ mod tests {
             "h265parse"
         );
         assert!(!options.warm_video());
+    }
+
+    #[test]
+    fn pacing_is_on_unless_the_caller_says_otherwise() {
+        assert!(Options::default().pacing());
+        assert!(Options::new("fakesink", "fakesink").pacing());
+        assert!(
+            !Options::new("fakesink", "fakesink")
+                .without_pacing()
+                .pacing()
+        );
+        assert!(
+            !Options::new("fakesink", "fakesink")
+                .with_pacing(false)
+                .pacing()
+        );
+        assert!(
+            Options::new("fakesink", "fakesink")
+                .without_pacing()
+                .with_pacing(true)
+                .pacing()
+        );
     }
 }

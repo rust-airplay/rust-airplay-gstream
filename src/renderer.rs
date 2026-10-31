@@ -195,7 +195,11 @@ impl Renderer for GstRenderer {
                 ))
             })?;
             let args = video::pipeline_args(chain, &self.video_sink_args);
-            return Ok(Box::new(GstVideo::start(program, &args)?));
+            return Ok(Box::new(GstVideo::start(
+                program,
+                &args,
+                self.options.pacing(),
+            )?));
         }
         // The kept pipeline stays in the slot while a session uses it: the stream holds a
         // reference, the slot holds another, and the one thing that must not happen is
@@ -207,7 +211,10 @@ impl Renderer for GstRenderer {
                 if !pipeline.is_claimed() {
                     // The pipeline a previous session left behind, still decoding and
                     // still showing what it was told to last.
-                    return Ok(Box::new(GstVideo::adopted(Arc::clone(pipeline))));
+                    return Ok(Box::new(GstVideo::adopted(
+                        Arc::clone(pipeline),
+                        self.options.pacing(),
+                    )));
                 }
                 // A stream still holds it, so a second session would interleave two
                 // H.264 streams into one pipe, which decodes as neither. A new session
@@ -229,7 +236,7 @@ impl Renderer for GstRenderer {
         let pipeline =
             Arc::new(Pipeline::start(program, &args).map_err(pipeline::as_render_error)?);
         *kept = Some((Arc::clone(&pipeline), config.codec));
-        Ok(Box::new(GstVideo::adopted(pipeline)))
+        Ok(Box::new(GstVideo::adopted(pipeline, self.options.pacing())))
     }
 
     fn set_volume(&self, volume: Volume) -> Result<(), RenderError> {

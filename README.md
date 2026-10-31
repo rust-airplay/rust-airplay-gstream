@@ -73,6 +73,7 @@ corresponding environment variable would produce, so `Options::default` behaves 
 | `.with_video_sink(sink)` | GStreamer video sink | first installed of `d3d11videosink`, `autovideosink`, `glimagesink`, `fakesink` |
 | `.with_video_chain(codec, parser, decoder)` | the parser and decoder for H.264 or H.265 | `h264parse` + `avdec_h264`, `h265parse` + `avdec_h265` |
 | `.with_warm_video(bool)` | keep the video pipeline between sessions | off |
+| `.with_pacing(bool)` / `.without_pacing()` | pace video frames on a cumulative timeline | on |
 
 A sink is an element and, optionally, its properties -- `fakesink`, or
 `filesink location=out.raw`. It is checked when the renderer is built: the element must exist,
@@ -107,7 +108,12 @@ uses `Options::new` and the `with_*` methods instead.
 ## What it does with the stream
 
 - **Video** is written to the subprocess in the order it was pushed. A byte stream carries no
-  timestamps, so pacing happens here, in `VideoStream::set_pace`.
+  timestamps, so pacing happens here, in `VideoStream::set_pace`: the wait is scheduled against
+  a cumulative deadline, so a sleep that returns late does not push every later frame back with
+  it, and a spacing of zero means "do not wait" rather than "sleep for zero". A stream that
+  falls more than one interval behind is re-anchored at the current time instead of repaying
+  the gap as a burst. A sink that schedules on its own clock can turn this off with
+  `Options::without_pacing()`.
 - **Audio** keeps its timing: each frame is an `appsrc` buffer whose presentation time is its
   sample offset from the first frame of the session, at the session's sample rate.
 - **Volume** is a linear gain on a `volume` element in front of the sink, applied to the stream
