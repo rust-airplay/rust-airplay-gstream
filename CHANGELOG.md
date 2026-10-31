@@ -4,13 +4,13 @@ All notable changes to this crate are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the version numbers follow
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.3.1] - 2026-10-31
 
-The next release is 0.3.1 and its floor is `rust-airplay = "0.3.1"`: core 0.3.1 stopped
-delegating its pacing to `VideoStream::set_pace` and now restarts a mirror group on a key
-frame after an overflow, which is the pairing this backend's pacer and its queue were written
-for. The trait's cumulative-deadline wording arrived in the same release, and this backend
-already satisfied it.
+This release requires `rust-airplay = "0.3.1"`: core 0.3.1 stopped delegating its pacing to
+`VideoStream::set_pace` and now restarts a mirror group on a key frame after an overflow,
+which is the pairing this backend's pacer and its queue were written for. The trait's
+cumulative-deadline wording arrived in the same release, and this backend already satisfied
+it.
 
 ### Fixed
 
@@ -175,5 +175,6 @@ breaking change because the public surface is smaller than 0.2's.
 First release against the core's 0.2 line: audio in-process through `appsrc`, video as a
 `gst-launch-1.0` subprocess, and the warm-pipeline option.
 
+[0.3.1]: https://github.com/rust-airplay/rust-airplay-gstream/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/rust-airplay/rust-airplay-gstream/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/rust-airplay/rust-airplay-gstream/releases/tag/v0.2.0
